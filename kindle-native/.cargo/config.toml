@@ -1,0 +1,5 @@
+[target.arm-unknown-linux-musleabi]
+linker = "rust-lld"
+
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"

@@ -1,0 +1,63 @@
+component InkButton inherits Rectangle {
+    in property <string> label;
+    callback activated();
+    min-height: 52px;
+    border-width: 2px;
+    border-color: #222;
+    background: touch.pressed ? #222 : #fff;
+    Text {
+        text: root.label;
+        color: touch.pressed ? #fff : #222;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea { clicked => { root.activated(); } }
+}
+
+export component AppWindow inherits Window {
+    title: "Kindle Native · Rust + Slint";
+    width: 600px;
+    height: 800px;
+    background: #fff;
+    default-font-size: 22px;
+    in-out property <int> page: 1;
+    callback next-page();
+    callback previous-page();
+    callback exit();
+
+    VerticalLayout {
+        padding: 32px;
+        spacing: 20px;
+        Text { text: "KINDLE NATIVE"; font-size: 18px; color: #555; }
+        Text { text: "Hello, Slint."; font-size: 44px; font-weight: 700; color: #111; }
+        Rectangle { height: 3px; background: #111; }
+        Text { text: "A native Rust application for your e-ink screen."; wrap: word-wrap; color: #333; }
+        Rectangle {
+            vertical-stretch: 1;
+            border-width: 1px;
+            border-color: #999;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+                Text { text: "Page " + root.page; font-size: 36px; color: #111; }
+                Text { text: "Edit ui/app.slint to build your application."; wrap: word-wrap; color: #444; }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 0px;
+                    for shade in [#000, #333, #666, #999, #ccc, #fff]: Rectangle {
+                        background: shade;
+                        height: 48px;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            InkButton { label: "Previous"; activated => { root.previous-page(); } }
+            InkButton { label: "Next"; activated => { root.next-page(); } }
+            InkButton { label: "Exit"; activated => { root.exit(); } }
+        }
+    }
+}
