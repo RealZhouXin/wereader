@@ -1,4 +1,4 @@
-# Kindle Native · Rust + Slint
+# rereader · Rust + Slint
 
 一个 Kindle 原生应用起始项目，UI 使用 Slint，设备后端使用
 [sverrejb/slint-kindle-backend](https://github.com/sverrejb/slint-kindle-backend)。
@@ -32,10 +32,10 @@ sh scripts/package.sh
 需要 SH_Integration / Scriptlets。也可以通过设备 SSH 执行：
 
 ```sh
-sh /mnt/us/kindle-native/start.sh
+sh /mnt/us/rereader/start.sh
 # 可选：自带字体、黑白模式或旋转
-sh /mnt/us/kindle-native/start.sh --font /mnt/us/fonts/LXGWWenKai-Regular.ttf --rotation 90
-sh /mnt/us/kindle-native/start.sh --black-and-white
+sh /mnt/us/rereader/start.sh --font /mnt/us/fonts/LXGWWenKai-Regular.ttf --rotation 90
+sh /mnt/us/rereader/start.sh --black-and-white
 ```
 
 默认嵌入 Tuffy 拉丁字体，可直接展示英文 Demo；中文界面需传入包含中文字形的字体。
@@ -62,14 +62,14 @@ sh scripts/package.sh arm-unknown-linux-musleabi
 启动器默认不暂停系统框架。若系统界面抢占屏幕，确认机型的进程后可从 SSH 使用：
 
 ```sh
-KINDLE_MANAGE_FRAMEWORK=1 sh /mnt/us/kindle-native/start.sh
+KINDLE_MANAGE_FRAMEWORK=1 sh /mnt/us/rereader/start.sh
 ```
 
 此选项会暂停 `awesome`、`cvm`、`KPPMainApp` 的现有进程，并在正常退出、应用报错
 或收到 HUP/INT/TERM 时恢复本次暂停的 PID。它不能处理断电、内核崩溃、启动器被
 SIGKILL 等情况；首次调试保留 SSH 通道，异常时重启设备。锁位于
-`/tmp/kindle-native.lock`，重启后仍有锁时，先确认无运行实例再移除空锁目录。
-日志位于 `/mnt/us/kindle-native/logs/`，按启动时间生成。
+`/tmp/rereader.lock`，重启后仍有锁时，先确认无运行实例再移除空锁目录。
+日志位于 `/mnt/us/rereader/logs/`，按启动时间生成。
 
 ## 固定依赖与许可
 

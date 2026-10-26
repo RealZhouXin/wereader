@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
-app_dir=/mnt/us/kindle-native
-binary="$app_dir/bin/kindle-native"
+app_dir=/mnt/us/rereader
+binary="$app_dir/bin/rereader"
 [ -x "$binary" ] || { echo "Missing executable: $binary" >&2; exit 1; }
 [ -c /dev/fb0 ] || { echo "Kindle framebuffer unavailable" >&2; exit 1; }
 mkdir -p "$app_dir/logs"
 # mkdir is atomic; never start a second owner of the display.
-lock=/tmp/kindle-native.lock
+lock=/tmp/rereader.lock
 mkdir "$lock" 2>/dev/null || { echo "Already running, or stale lock: $lock" >&2; exit 1; }
 paused=""
 child=""

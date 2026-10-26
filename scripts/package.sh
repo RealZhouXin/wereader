@@ -8,12 +8,12 @@ case "$target" in
 esac
 cargo build --locked --release --no-default-features --features kindle --target "$target"
 dest="dist/$target/install"
-mkdir -p "$dest"
+mkdir -p "$dest/rereader/bin"
 cp -R packaging/. "$dest/"
-cp "target/$target/release/kindle-native" "$dest/kindle-native/bin/kindle-native"
-cp README.md LICENSE "$dest/kindle-native/"
-cp assets/Tuffy-LICENSE.txt "$dest/kindle-native/"
-chmod 755 "$dest/kindle-native/start.sh" "$dest/kindle-native/bin/kindle-native"
-printf '%s\n' "$target" > "$dest/kindle-native/BUILD_TARGET"
-COPYFILE_DISABLE=1 tar -czf "dist/kindle-native-$target.tar.gz" -C "$dest" .
+cp "target/$target/release/rereader" "$dest/rereader/bin/rereader"
+cp README.md LICENSE "$dest/rereader/"
+cp assets/Tuffy-LICENSE.txt "$dest/rereader/"
+chmod 755 "$dest/rereader/start.sh" "$dest/rereader/bin/rereader"
+printf '%s\n' "$target" > "$dest/rereader/BUILD_TARGET"
+COPYFILE_DISABLE=1 tar -czf "dist/rereader-$target.tar.gz" -C "$dest" .
 echo "Copy the contents of $dest to the Kindle USB root."

@@ -86,7 +86,7 @@ fn run_kindle(opts: &Options) -> Result<(), Box<dyn Error>> {
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("kindle-native                         Desktop Slint window\nkindle-native --output preview.pgm    Headless Slint screenshot\nkindle-native --device [--font path.ttf] [--black-and-white] [--rotation 90]\nKindle mode requires a Linux build with --no-default-features --features kindle.");
+        println!("rereader                         Desktop Slint window\nrereader --output preview.pgm    Headless Slint screenshot\nrereader --device [--font path.ttf] [--black-and-white] [--rotation 90]\nKindle mode requires a Linux build with --no-default-features --features kindle.");
         return Ok(());
     }
     let opts = Options::parse(args)?;
@@ -112,7 +112,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("kindle-native: {error}");
+        eprintln!("rereader: {error}");
         std::process::exit(1);
     }
 }

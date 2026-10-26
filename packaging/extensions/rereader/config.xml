@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
 <extension>
-  <information><name>Kindle Native</name><version>0.1.0</version><id>kindle-native</id></information>
+  <information><name>rereader</name><version>0.1.0</version><id>rereader</id></information>
   <menus><menu type="json" dynamic="true">menu.json</menu></menus>
 </extension>

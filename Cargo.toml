@@ -1,10 +1,10 @@
 [package]
-name = "kindle-native"
+name = "rereader"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
 license = "MIT"
-description = "A Slint-based Kindle native application starter"
+description = "rereader: a Slint-based reader for Kindle and desktop"
 
 [features]
 default = ["desktop"]

@@ -2152,15 +2152,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "kindle-native"
-version = "0.1.0"
-dependencies = [
- "slint",
- "slint-backend-kindle",
- "slint-build",
-]
-
-[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3351,6 +3342,15 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "rereader"
+version = "0.1.0"
+dependencies = [
+ "slint",
+ "slint-backend-kindle",
+ "slint-build",
+]
 
 [[package]]
 name = "resvg"

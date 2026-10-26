@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "name": "rereader",
+      "items": [
+        { "name": "Launch", "action": "sh /mnt/us/rereader/start.sh", "exitmenu": true }
+      ]
+    }
+  ]
+}
