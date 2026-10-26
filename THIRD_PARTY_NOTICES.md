@@ -1,5 +1,27 @@
 # Third-party notices
 
+The rereader application as a whole is distributed under GPL-3.0-only;
+see `LICENSE`. Third-party components retain their original copyright and
+license notices. The source archive includes vendored Cargo dependencies
+with their upstream notices and license files. The Kindle package also
+includes dependency license and notice files in `licenses/`.
+
+## Slint 1.18.1
+
+Slint is used under its GNU GPL version 3 option (GPL-3.0-only), including
+in the Kindle build. See `LICENSE` and
+[the upstream licensing declaration](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSE.md).
+Slint's royalty-free license is not the license selected by this project.
+
+## slint-backend-kindle 0.7.1
+
+[slint-kindle-backend](https://github.com/sverrejb/slint-kindle-backend)
+is offered under MIT OR Apache-2.0; this distribution selects MIT.
+Its `LICENSE-MIT` is included in the Kindle package as
+`slint-backend-kindle-LICENSE-MIT` and in the vendored source archive.
+
+## weread-omni
+
 The E-ink protocol implementation in `src/weread/` is adapted from
 [teng-lin/weread-omni](https://github.com/teng-lin/weread-omni),
 commit `88bd2e095d7d7ee423eaadf8f40653e72c5be6d4`.

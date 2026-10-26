@@ -101,7 +101,20 @@ SIGKILL 等情况；首次调试保留 SSH 通道，异常时重启设备。锁�
 
 固定 `slint = 1.18.1`、`slint-build = 1.18.1`、`slint-backend-kindle = 0.7.1`，
 并附带 `Cargo.lock`。Kindle feature 的依赖只在 Linux 上启用。
-本项目代码使用 MIT；协议实现参考 `weread-omni`，其许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Slint、后端和字体分别遵循各自许可，分发时保留相应声明。
+Copyright (c) 2026 rereader contributors.
+
+本项目采用 **GNU GPL 第 3 版（仅此版本，`GPL-3.0-only`）**，完整条款见 [LICENSE](LICENSE)。
+你可以依照该许可使用、修改和再分发本程序；本程序不提供任何担保，详见许可中的免责声明。
+Slint 选择 GPLv3 许可，包含 Slint 的桌面及 Kindle 完整程序均按 GPLv3 分发。
+协议实现参考 `weread-omni`，保留其 MIT 声明；后端、字体及其他第三方组件保留各自许可，
+详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+`scripts/package.sh` 同时生成 `dist/rereader-<target>.tar.gz` 安装包和
+`dist/rereader-<target>-source.tar.gz` 对应源码包；源码包包含本项目源码、资源、
+构建及安装脚本、`Cargo.lock` 和通过 `cargo vendor --locked` 收集的依赖源码与许可。
+打包需要能获取锁定版本的全部依赖。发布时必须同时上传这两个文件，在二进制下载处提供
+清晰且无需额外付费的对应源码下载入口，并保持源码可用；不能只提供最新分支链接。
+具体重建与分发说明见 [SOURCE.md](SOURCE.md)。
 
 ## 当前验证
 

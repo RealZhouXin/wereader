@@ -3,7 +3,7 @@ name = "rereader"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
-license = "MIT"
+license = "GPL-3.0-only"
 description = "rereader: a Slint-based reader for Kindle and desktop"
 
 [features]
