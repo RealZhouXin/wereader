@@ -1,5 +1,7 @@
 # rereader：基于 weread-omni 的墨水屏协议研究
 
+当前项目已实现墨水屏客户端扫码登录、会话保存/恢复和电子书书架分页展示，使用方式及验证范围见 [README](../README.md#扫码登录与书架)。正文与进度写回仍待实现；下文的上游研究结论以所标注的源码快照为准。
+
 研究日期：2026-10-26。路线已选定为墨水屏客户端协议。
 
 补充材料：[wxBook 墨水屏实现研究](wxbook-interface-research.md)。该项目提供正文及进度代码参考，但其 HTTP 层采用独立的 Web 会话，不能直接补齐本文客户端协议中的下载和上报实现。
@@ -43,7 +45,7 @@ CLI / TypeScript 调用方
 
 [WeReadClient][client] 将方法委托给墨水屏客户端；[MobileApiClient][mobile-client] 延迟创建传输层，并维护登录会话代次。多请求操作可以固定在同一个会话上，避免中途重新登录后把前后两次请求混到不同账号。
 
-对 Rust 的对应关系建议如下。这是 rereader 的设计安排，尚未实现：
+对 Rust 的职责划分建议如下。当前登录、传输和书架实现集中在 `src/weread/mod.rs`，凭据存储在 `src/weread/store.rs`，任务生命周期和 UI 更新在 `src/app.rs`；正文和进度写回模块待实现：
 
 | Rust 模块 | 参考实现 | 职责 |
 | --- | --- | --- |
@@ -198,7 +200,7 @@ Rust 的响应模型建议仅将必需标识作为严格字段，其余使用可
 
 第二阶段可以形成可操作的登录/书架/目录应用，但“可阅读”的验收应以第三、第四阶段的正文与位置闭环为准。
 
-移植或复制实现时保留项目的 [MIT 许可及作者声明][license]。这份文档仅完成源码研究，没有改动应用运行逻辑。
+移植或复制实现时保留项目的 [MIT 许可及作者声明][license]。项目已在 `THIRD_PARTY_NOTICES.md` 收录上游声明；实际运行能力及验证范围以 README 为准。
 
 [client]: https://github.com/teng-lin/weread-omni/blob/88bd2e095d7d7ee423eaadf8f40653e72c5be6d4/src/api/client.ts
 [mobile-client]: https://github.com/teng-lin/weread-omni/blob/88bd2e095d7d7ee423eaadf8f40653e72c5be6d4/src/api/mobile-client.ts

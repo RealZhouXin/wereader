@@ -1,11 +1,13 @@
+mod app;
 mod software;
+mod weread;
 
 use slint::ComponentHandle;
 use std::{env, error::Error, path::PathBuf};
 
 slint::include_modules!();
 
-const DEFAULT_FONT: &[u8] = include_bytes!("../assets/Tuffy.ttf");
+const DEFAULT_FONT: &[u8] = include_bytes!("../assets/NotoSansSC-Regular.otf");
 
 #[derive(Default, Debug)]
 struct Options {
@@ -41,8 +43,8 @@ impl Options {
         if ![0, 90, 180, 270].contains(&opts.rotation) {
             return Err("--rotation must be 0, 90, 180 or 270".into());
         }
-        if !opts.device && (opts.font.is_some() || opts.black_and_white || opts.rotation != 0) {
-            return Err("--font, --black-and-white and --rotation require --device".into());
+        if !opts.device && (opts.black_and_white || opts.rotation != 0) {
+            return Err("--black-and-white and --rotation require --device".into());
         }
         Ok(opts)
     }
@@ -53,7 +55,7 @@ fn create_ui() -> Result<AppWindow, slint::PlatformError> {
     let weak = ui.as_weak();
     ui.on_next_page(move || {
         if let Some(ui) = weak.upgrade() {
-            ui.set_page(ui.get_page().saturating_add(1));
+            ui.set_page(ui.get_page().saturating_add(1).min(ui.get_page_count()));
         }
     });
     let weak = ui.as_weak();
@@ -70,6 +72,13 @@ fn create_ui() -> Result<AppWindow, slint::PlatformError> {
     Ok(ui)
 }
 
+fn register_font(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    let renderer = slint::platform::software_renderer::SoftwareRenderer::new();
+    let renderer: &dyn slint::platform::Renderer = &renderer;
+    renderer.register_font_from_path(path)?;
+    Ok(())
+}
+
 #[cfg(all(feature = "kindle", target_os = "linux"))]
 fn run_kindle(opts: &Options) -> Result<(), Box<dyn Error>> {
     let font = opts.font.as_ref().map(std::fs::read).transpose()?;
@@ -77,6 +86,7 @@ fn run_kindle(opts: &Options) -> Result<(), Box<dyn Error>> {
     backend.set_black_and_white(opts.black_and_white);
     backend.set_rotation(opts.rotation);
     let ui = create_ui()?;
+    let _controller = app::start(&ui)?;
     // Ensure the backend's first poll has a timer deadline, even without touch.
     slint::Timer::single_shot(std::time::Duration::ZERO, || {});
     ui.run()?;
@@ -86,7 +96,7 @@ fn run_kindle(opts: &Options) -> Result<(), Box<dyn Error>> {
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("rereader                         Desktop Slint window\nrereader --output preview.pgm    Headless Slint screenshot\nrereader --device [--font path.ttf] [--black-and-white] [--rotation 90]\nKindle mode requires a Linux build with --no-default-features --features kindle.");
+        println!("rereader [--font path.ttf]           Desktop WeRead client\nrereader --output preview.pgm        Offline screenshot\nrereader --device [--font path.ttf] [--black-and-white] [--rotation 90]\nKindle mode requires a Linux build with --no-default-features --features kindle.\nREREADER_DATA_DIR selects the private session directory.");
         return Ok(());
     }
     let opts = Options::parse(args)?;
@@ -99,11 +109,16 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
     }
     if let Some(output) = opts.output {
-        return software::screenshot(&output);
+        return software::screenshot(&output, opts.font.as_deref());
     }
     #[cfg(feature = "desktop")]
     {
-        create_ui()?.run()?;
+        let ui = create_ui()?;
+        if let Some(font) = &opts.font {
+            register_font(font)?;
+        }
+        let _controller = app::start(&ui)?;
+        ui.run()?;
         Ok(())
     }
     #[cfg(not(feature = "desktop"))]
@@ -128,7 +143,7 @@ mod tests {
         assert!(parse(&["--device", "--rotation", "90"]).is_ok());
         assert!(parse(&["--device", "--rotation", "45"]).is_err());
         assert!(parse(&["--device", "--output", "preview.pgm"]).is_err());
-        assert!(parse(&["--font", "font.ttf"]).is_err());
+        assert!(parse(&["--font", "font.ttf"]).is_ok());
         assert!(parse(&["--output"]).is_err());
     }
 }

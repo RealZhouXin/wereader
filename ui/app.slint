@@ -1,63 +1,153 @@
+import "../assets/NotoSansSC-Regular.otf";
+
+export struct ShelfRow {
+    book-id: string, title: string, author: string,
+    cover: image, cover-state: int, finished: bool,
+}
+
 component InkButton inherits Rectangle {
     in property <string> label;
+    in property <bool> enabled: true;
     callback activated();
-    min-height: 52px;
-    border-width: 2px;
-    border-color: #222;
-    background: touch.pressed ? #222 : #fff;
+    min-height: 38px;
+    border-width: 1px;
+    border-color: root.enabled ? #999 : #ddd;
+    border-radius: 19px;
+    background: touch.pressed && root.enabled ? #ddd : #fff;
     Text {
         text: root.label;
-        color: touch.pressed ? #fff : #222;
-        font-size: 20px;
+        color: root.enabled ? #222 : #aaa;
+        font-size: 16px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    touch := TouchArea { clicked => { root.activated(); } }
+    touch := TouchArea { enabled: root.enabled; clicked => { root.activated(); } }
 }
 
 export component AppWindow inherits Window {
-    title: "rereader · Rust + Slint";
+    title: "rereader · 微信读书";
     width: 600px;
     height: 800px;
     background: #fff;
-    default-font-size: 22px;
+    default-font-family: "Noto Sans SC";
+    default-font-size: 20px;
     in-out property <int> page: 1;
+    in property <[ShelfRow]> books;
+    in property <int> total-books;
+    in-out property <string> query;
+    in property <bool> logged-in: false;
+    in property <bool> busy: false;
+    in property <bool> has-qr: false;
+    in property <image> qr-image;
+    in property <string> account;
+    in property <string> status: "点击登录，扫码查看微信读书书架";
+    out property <int> page-count: max(1, ceil(root.books.length / 12));
+    callback login();
+    callback refresh();
+    callback logout();
+    callback search();
     callback next-page();
     callback previous-page();
     callback exit();
 
     VerticalLayout {
-        padding: 32px;
-        spacing: 20px;
-        Text { text: "rereader"; font-size: 18px; color: #555; }
-        Text { text: "Hello, Slint."; font-size: 44px; font-weight: 700; color: #111; }
-        Rectangle { height: 3px; background: #111; }
-        Text { text: "A native Rust application for your e-ink screen."; wrap: word-wrap; color: #333; }
-        Rectangle {
-            vertical-stretch: 1;
+        padding-top: 18px;
+        padding-bottom: 14px;
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 10px;
+        if root.logged-in: Rectangle {
+            height: 40px;
+            border-radius: 20px;
             border-width: 1px;
-            border-color: #999;
-            VerticalLayout {
-                padding: 24px;
-                spacing: 16px;
-                Text { text: "Page " + root.page; font-size: 36px; color: #111; }
-                Text { text: "Edit ui/app.slint to build your application."; wrap: word-wrap; color: #444; }
-                Rectangle { vertical-stretch: 1; }
-                HorizontalLayout {
-                    spacing: 0px;
-                    for shade in [#000, #333, #666, #999, #ccc, #fff]: Rectangle {
-                        background: shade;
-                        height: 48px;
-                        horizontal-stretch: 1;
-                    }
-                }
+            border-color: #aaa;
+            Text { x: 14px; width: 24px; height: parent.height; text: "⌕"; font-size: 26px; vertical-alignment: center; color: #555; }
+            if root.query == "": Text { x: 46px; height: parent.height; text: "搜索书架"; color: #aaa; font-size: 17px; vertical-alignment: center; }
+            TextInput {
+                x: 46px; y: 2px; width: parent.width - 90px; height: parent.height - 4px;
+                text <=> root.query;
+                single-line: true;
+                font-size: 17px;
+                vertical-alignment: center;
+                edited => { root.search(); }
+            }
+            if root.query != "": Text {
+                x: parent.width - 38px; width: 30px; height: parent.height;
+                text: "×"; font-size: 20px; color: #777; horizontal-alignment: center; vertical-alignment: center;
+                TouchArea { clicked => { root.query = ""; root.search(); } }
             }
         }
         HorizontalLayout {
-            spacing: 12px;
-            InkButton { label: "Previous"; activated => { root.previous-page(); } }
-            InkButton { label: "Next"; activated => { root.next-page(); } }
-            InkButton { label: "Exit"; activated => { root.exit(); } }
+            height: 36px;
+            Text { text: root.logged-in ? "书架" : "rereader"; font-size: root.logged-in ? 26px : 30px; color: #222; vertical-alignment: center; }
+            if root.logged-in: InkButton { label: root.busy ? "刷新中" : "刷新"; width: 72px; enabled: !root.busy; activated => { root.refresh(); } }
+        }
+        if !root.logged-in: Text { text: root.status; wrap: word-wrap; color: #555; font-size: 17px; min-height: 54px; }
+        content := Rectangle {
+            vertical-stretch: 1;
+            if root.logged-in: Rectangle {
+                for book[index] in root.books: Rectangle {
+                    visible: index >= (root.page - 1) * 12 && index < root.page * 12;
+                    width: (parent.width - 48px) / 4;
+                    height: (parent.height - 24px) / 3;
+                    x: mod(index, 4) * (self.width + 16px);
+                    y: mod(floor(index / 4), 3) * (self.height + 12px);
+                    cover-box := Rectangle {
+                        height: parent.height - 30px;
+                        width: parent.width;
+                        background: #f4f4f4;
+                        if book.cover-state == 1: Image { source: book.cover; width: parent.width; height: parent.height; image-fit: contain; }
+                        if book.cover-state != 1: Rectangle {
+                            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+                            border-width: 1px; border-color: #ccc; background: #f7f7f7;
+                            VerticalLayout {
+                                padding: 10px;
+                                Text { text: book.title; wrap: word-wrap; font-size: 17px; color: #555; vertical-alignment: center; }
+                                Text { text: book.cover-state == 0 ? "加载封面…" : "暂无封面"; font-size: 11px; color: #999; }
+                            }
+                        }
+                        if book.finished: Rectangle {
+                            x: parent.width - 40px; y: 0px; width: 40px; height: 24px;
+                            background: #fff;
+                            Text { text: "读完"; font-size: 15px; color: #333; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+                    Text { y: parent.height - 25px; width: parent.width; height: 24px; text: book.title; color: #222; font-size: 17px; overflow: elide; vertical-alignment: center; }
+                }
+                if root.books.length == 0: Text {
+                    text: root.query != "" ? "没有找到匹配的书籍" : root.busy ? "正在加载书架…" : "书架还是空的";
+                    color: #888; font-size: 20px; horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+            if !root.logged-in: VerticalLayout {
+                alignment: center;
+                spacing: 18px;
+                HorizontalLayout {
+                    height: root.has-qr ? 280px : 0px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Image { source: root.qr-image; visible: root.has-qr; width: 280px; height: root.has-qr ? 280px : 0px; image-fit: contain; horizontal-stretch: 0; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Text { text: root.has-qr ? "使用微信扫一扫，在手机上确认登录" : "你的微信读书，随手可读"; horizontal-alignment: center; wrap: word-wrap; font-size: 18px; color: #555; }
+            }
+        }
+        if root.logged-in: Text {
+            text: root.status;
+            font-size: 12px; color: #888; overflow: elide;
+            height: 20px;
+        }
+        Rectangle { height: 1px; background: #ddd; }
+        HorizontalLayout {
+            height: 40px;
+            spacing: 8px;
+            if root.logged-in: Text { text: "书架"; width: 46px; font-size: 17px; color: #222; vertical-alignment: center; }
+            InkButton { label: root.logged-in ? "退出登录" : "登录 / 换码"; width: root.logged-in ? 90px : 150px; activated => { if root.logged-in { root.logout(); } else { root.login(); } } }
+            if !root.logged-in: InkButton { label: "取消"; width: 72px; activated => { root.logout(); } }
+            InkButton { label: "退出"; width: 60px; activated => { root.exit(); } }
+            Rectangle { horizontal-stretch: 1; }
+            if root.logged-in: Text { text: root.page + "/" + root.page-count; width: 48px; font-size: 13px; color: #777; horizontal-alignment: center; vertical-alignment: center; }
+            if root.logged-in: InkButton { label: "⌃"; width: 52px; enabled: root.page > 1; activated => { root.previous-page(); } }
+            if root.logged-in: InkButton { label: "⌄"; width: 52px; enabled: root.page < root.page-count; activated => { root.next-page(); } }
         }
     }
 }

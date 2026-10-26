@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 app_dir=/mnt/us/rereader
+export REREADER_DATA_DIR="${REREADER_DATA_DIR:-/var/local/rereader}"
 binary="$app_dir/bin/rereader"
 [ -x "$binary" ] || { echo "Missing executable: $binary" >&2; exit 1; }
 [ -c /dev/fb0 ] || { echo "Kindle framebuffer unavailable" >&2; exit 1; }

@@ -1,3 +1,7 @@
+[env]
+CC_armv7_unknown_linux_musleabihf = { value = "clang", force = false }
+CC_arm_unknown_linux_musleabi = { value = "clang", force = false }
+
 [target.arm-unknown-linux-musleabi]
 linker = "rust-lld"
 
