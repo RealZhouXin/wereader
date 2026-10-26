@@ -4,6 +4,12 @@
 [sverrejb/slint-kindle-backend](https://github.com/sverrejb/slint-kindle-backend)。
 与同目录的微信读书安装包相互独立。
 
+微信读书接入采用墨水屏客户端路线，参考 `weread-omni`：
+
+- [接口清单与接入安排](docs/weread-api.md)：登录、书架、目录、笔记及正文/进度待验证接口。
+- [源码研究与移植安排](docs/weread-eink-research.md)：设备配置、会话契约、传输行为和 Rust 实施顺序。
+- [wxBook 墨水屏实现研究](docs/wxbook-interface-research.md)：正文、进度及缓存实现参考；其 HTTP 层采用独立的 Web 会话协议。
+
 ## 开发与预览
 
 需要 Rust 1.92 或更新版本。
