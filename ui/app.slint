@@ -92,27 +92,39 @@ export component AppWindow inherits Window {
                     height: (parent.height - 24px) / 3;
                     x: mod(index, 4) * (self.width + 16px);
                     y: mod(floor(index / 4), 3) * (self.height + 12px);
-                    cover-box := Rectangle {
-                        height: parent.height - 30px;
-                        width: parent.width;
-                        background: #f4f4f4;
-                        if book.cover-state == 1: Image { source: book.cover; width: parent.width; height: parent.height; image-fit: contain; }
-                        if book.cover-state != 1: Rectangle {
-                            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-                            border-width: 1px; border-color: #ccc; background: #f7f7f7;
-                            VerticalLayout {
-                                padding: 10px;
-                                Text { text: book.title; wrap: word-wrap; font-size: 17px; color: #555; vertical-alignment: center; }
-                                Text { text: book.cover-state == 0 ? "加载封面…" : "暂无封面"; font-size: 11px; color: #999; }
+                    VerticalLayout {
+                        padding: 0px;
+                        spacing: 8px;
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: #f4f4f4;
+                            clip: true;
+                            if book.cover-state == 1: Image {
+                                x: 0px; y: 0px;
+                                width: parent.width; height: parent.height;
+                                source: book.cover; image-fit: contain;
+                            }
+                            if book.cover-state != 1: Rectangle {
+                                x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+                                border-width: 1px; border-color: #ccc; background: #f7f7f7;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    Text { text: book.title; wrap: word-wrap; font-size: 17px; color: #555; vertical-alignment: center; }
+                                    Text { text: book.cover-state == 0 ? "加载封面…" : "暂无封面"; font-size: 11px; color: #999; }
+                                }
+                            }
+                            if book.finished: Rectangle {
+                                x: parent.width - 40px; y: 0px; width: 40px; height: 24px;
+                                background: #fff;
+                                Text { text: "读完"; font-size: 15px; color: #333; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
-                        if book.finished: Rectangle {
-                            x: parent.width - 40px; y: 0px; width: 40px; height: 24px;
-                            background: #fff;
-                            Text { text: "读完"; font-size: 15px; color: #333; horizontal-alignment: center; vertical-alignment: center; }
+                        Text {
+                            height: 24px;
+                            text: book.title; color: #222; font-size: 17px;
+                            overflow: elide; vertical-alignment: center;
                         }
                     }
-                    Text { y: parent.height - 25px; width: parent.width; height: 24px; text: book.title; color: #222; font-size: 17px; overflow: elide; vertical-alignment: center; }
                 }
                 if root.books.length == 0: Text {
                     text: root.query != "" ? "没有找到匹配的书籍" : root.busy ? "正在加载书架…" : "书架还是空的";

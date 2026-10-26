@@ -125,7 +125,7 @@ mod tests {
             }
             row.cover = slint::Image::from_rgb8(cover);
             row.cover_state = 1;
-            row.finished = index == 8;
+            row.finished = index == 11;
             model.set_row_data(index, row);
         }
         window.draw_if_needed(|renderer| {
@@ -140,6 +140,57 @@ mod tests {
             image::ColorType::Rgb8,
         )
         .unwrap();
+        // Regression: tall, wide and ordinary covers must never overlap the
+        // caption. Solid blue isolates cover bounds from dark caption glyphs.
+        for index in 0..model.row_count() {
+            let mut row = model.row_data(index).unwrap();
+            let (width, height) = match index % 3 {
+                0 => (120, 170),
+                1 => (100, 250),
+                _ => (250, 100),
+            };
+            let mut cover = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width, height);
+            cover
+                .make_mut_slice()
+                .fill(slint::Rgb8Pixel::new(43, 97, 173));
+            row.cover = slint::Image::from_rgb8(cover);
+            model.set_row_data(index, row);
+        }
+        window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 600);
+        });
+        let is_cover = |x: usize, y: usize| {
+            let p = pixels[y * 600 + x];
+            (p.r, p.g, p.b) == (43, 97, 173)
+        };
+        let mut bands = Vec::new();
+        let mut y = 0usize;
+        while y < 800 {
+            if !is_cover(87, y) {
+                y += 1;
+                continue;
+            }
+            let top = y;
+            while y < 800 && is_cover(87, y) {
+                y += 1;
+            }
+            bands.push((top, y));
+        }
+        assert_eq!(bands.len(), 3, "expected three cover rows");
+        for (top, bottom) in bands {
+            let middle = (top + bottom) / 2;
+            let left = (0..87).find(|&x| is_cover(x, middle)).unwrap();
+            let right = (87..160).find(|&x| !is_cover(x, middle)).unwrap();
+            for y in top..bottom {
+                for x in left..right {
+                    let p = pixels[y * 600 + x];
+                    assert!(
+                        !(p.r < 80 && p.g < 80 && p.b < 80),
+                        "caption overlaps cover at {x},{y}"
+                    );
+                }
+            }
+        }
         ui.set_logged_in(false);
         ui.set_qr_image(
             crate::app::qr_image("https://open.weixin.qq.com/connect/confirm?uuid=test").unwrap(),
