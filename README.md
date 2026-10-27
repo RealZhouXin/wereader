@@ -52,12 +52,19 @@ Kindle 的显示、触摸和事件循环直接交给上游后端，不需要额�
 
 ## 构建 Kindle 安装包
 
-需要可执行的 `clang`、`make`、`curl`、`tar`、`sha256sum`。SQLite 与 TLS 的 ARM C 代码使用 `scripts/clang-musl.sh`；首次构建需安装固定 musl 1.2.5 头文件，Rust 提供静态 libc 和 `rust-lld`。可通过目标专用的 `CC_armv7_unknown_linux_musleabihf` 覆盖 C 编译器，或用 `REREADER_MUSL_SYSROOT` 指定具有 `include/` 的自备 musl sysroot。
+需要可执行的 `clang`、`llvm-ar`、`make`、`curl`、`tar`、`sha256sum`。macOS 可通过 `brew install llvm` 安装 `llvm-ar`，并将 `$(brew --prefix llvm)/bin` 加入 `PATH`。SQLite 与 TLS 的 ARM C 代码使用 `scripts/clang-musl.sh`，静态归档使用 `llvm-ar`，避免 macOS 的 `ar`/`ranlib` 无法处理 ARM ELF 对象而生成空归档；首次构建需安装固定 musl 1.2.5 头文件，Rust 提供静态 libc 和 `rust-lld`。可通过目标专用的 `CC_armv7_unknown_linux_musleabihf`、`AR_armv7_unknown_linux_musleabihf` 覆盖 C 编译器和归档工具，或用 `REREADER_MUSL_SYSROOT` 指定具有 `include/` 的自备 musl sysroot。
 
 ```sh
 rustup target add armv7-unknown-linux-musleabihf
 # package.sh 会自动准备头文件；直接 cargo build 前先手动执行此步
 sh scripts/setup-musl-headers.sh armv7-unknown-linux-musleabihf
+sh scripts/package.sh
+```
+
+若此前在 macOS 上构建出现 `sqlite3_*` 或 `ring_core_*` 未定义符号，更新归档工具配置后先清除旧的 C 依赖产物，再重新构建（`ring` 不会自动跟踪归档工具环境变量的变化）：
+
+```sh
+cargo clean -p libsqlite3-sys -p ring --release --target armv7-unknown-linux-musleabihf
 sh scripts/package.sh
 ```
 
@@ -118,8 +125,10 @@ Slint 选择 GPLv3 许可，包含 Slint 的桌面及 Kindle 完整程序均按 
 协议实现参考 `weread-omni`，保留其 MIT 声明；后端、字体及其他第三方组件保留各自许可，
 详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-`scripts/package.sh` 同时生成 `dist/rereader-<target>.tar.gz` 安装包和
-`dist/rereader-<target>-source.tar.gz` 对应源码包；源码包包含本项目源码、资源、
+`scripts/package.sh` 当前默认仅生成本地调试用的 `dist/rereader-<target>.tar.gz` 安装包，
+跳过源码快照和 `cargo vendor`。需要同时生成对应源码包时运行
+`sh scripts/package.sh --with-source`（也可同时指定目标）；额外生成
+`dist/rereader-<target>-source.tar.gz`。源码包包含本项目源码、资源、
 构建及安装脚本、`Cargo.lock` 和通过 `cargo vendor --locked` 收集的依赖源码与许可。
 打包需要能获取锁定版本的全部依赖。发布时必须同时上传这两个文件，在二进制下载处提供
 清晰且无需额外付费的对应源码下载入口，并保持源码可用；不能只提供最新分支链接。

@@ -1,6 +1,9 @@
 [env]
 CC_armv7_unknown_linux_musleabihf = { value = "scripts/clang-musl.sh", relative = true, force = false }
 CC_arm_unknown_linux_musleabi = { value = "scripts/clang-musl.sh", relative = true, force = false }
+# Apple's ar/ranlib cannot archive the ARM ELF objects produced by clang.
+AR_armv7_unknown_linux_musleabihf = { value = "llvm-ar", force = false }
+AR_arm_unknown_linux_musleabi = { value = "llvm-ar", force = false }
 
 [target.arm-unknown-linux-musleabi]
 linker = "rust-lld"

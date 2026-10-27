@@ -5,3 +5,4 @@
 .zed/
 /data/
 /.toolchains/
+.DS_Store

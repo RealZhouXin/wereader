@@ -7,6 +7,8 @@ rereader 采用 GPL-3.0-only，不提供任何担保。完整许可见 `LICENSE`
 
 ## 获取对应源码
 
+当前打包脚本默认仅生成本地调试安装包，跳过源码打包；使用 `--with-source` 才会生成下面所述的对应源码包。
+
 本安装包的发布者应在同一下载页面提供 `rereader-<target>-source.tar.gz`，
 与 `rereader-<target>.tar.gz` 对应。源码包由同一次打包生成，包含实际用于构建的
 项目源码、资源、锁定依赖源码及构建和安装脚本。若收到的二进制没有对应源码入口，
@@ -15,7 +17,7 @@ rereader 采用 GPL-3.0-only，不提供任何担保。完整许可见 `LICENSE`
 ## 重建和安装
 
 解压源码包并进入 `rereader-source/`。需要 Rust 1.92 或更新版本、Cargo、clang、
-make、tar、sha256sum 和目标 Rust 标准库；这些通用工具不包含在源码包中。
+llvm-ar、make、tar、sha256sum 和目标 Rust 标准库；这些通用工具不包含在源码包中。
 `BUILD_INFO` 记录原构建的目标及 Rust/Cargo 版本，`Cargo.lock` 固定依赖版本。
 `.cargo/config.toml` 已配置使用包内的 `vendor/`，不需要从 crates.io 下载依赖。
 源码包另含 `.toolchains/musl-1.2.5.tar.gz` 与版权声明；头文件准备脚本校验 SHA-256，
@@ -27,7 +29,7 @@ sh scripts/setup-musl-headers.sh armv7-unknown-linux-musleabihf
 cargo build --offline --locked --release --no-default-features --features kindle \
   --target armv7-unknown-linux-musleabihf
 # 生成可安装包和新的对应源码包
-sh scripts/package.sh armv7-unknown-linux-musleabihf
+sh scripts/package.sh armv7-unknown-linux-musleabihf --with-source
 ```
 
 软浮点设备改用 `arm-unknown-linux-musleabi`。桌面可用 `cargo run --offline --locked`。
