@@ -92,6 +92,8 @@ export component AppWindow inherits Window {
     in property <bool> has-qr: false;
     in property <image> qr-image;
     in property <string> account;
+    in property <string> reading-time;
+    in property <string> weekly-reading-time;
     in property <string> status: "点击登录，扫码查看微信读书书架";
     in-out property <bool> account-open: false;
     out property <int> page-count: max(1, ceil(root.books.length / 12));
@@ -224,6 +226,24 @@ export component AppWindow inherits Window {
                             Rectangle { }
                         }
                         Text { text: root.logged-in ? root.account : "你的微信读书，随手可读"; color: Paper.ink; font-size: 25px * root.scale; horizontal-alignment: center; }
+                        if root.logged-in: Rectangle {
+                            height: 156px * root.scale;
+                            background: Paper.surface;
+                            border-width: 1px; border-color: Paper.line;
+                            border-radius: 12px * root.scale;
+                            VerticalLayout {
+                                padding: 22px * root.scale; spacing: 18px * root.scale;
+                                HorizontalLayout {
+                                    Text { text: "累计阅读时长"; color: Paper.muted; font-size: 20px * root.scale; vertical-alignment: center; }
+                                    Text { text: root.reading-time; color: Paper.ink; font-size: 24px * root.scale; horizontal-alignment: right; vertical-alignment: center; }
+                                }
+                                Rectangle { height: 1px; background: Paper.line; }
+                                HorizontalLayout {
+                                    Text { text: "本周阅读时间"; color: Paper.muted; font-size: 20px * root.scale; vertical-alignment: center; }
+                                    Text { text: root.weekly-reading-time; color: Paper.ink; font-size: 24px * root.scale; horizontal-alignment: right; vertical-alignment: center; }
+                                }
+                            }
+                        }
                         if !root.logged-in && root.has-qr: HorizontalLayout {
                             Rectangle { }
                             Rectangle {

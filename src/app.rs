@@ -30,7 +30,14 @@ enum Event {
     Qr(String),
     SignedIn(String),
     Shelf(Vec<Book>),
-    Cover { id: String, image: Option<Cover> },
+    AccountMetrics {
+        reading_time: String,
+        weekly_reading_time: String,
+    },
+    Cover {
+        id: String,
+        image: Option<Cover>,
+    },
     SignedOut,
     Failed(String),
 }
@@ -96,6 +103,8 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                     ui.set_query("".into());
                     ui.set_total_books(0);
                     ui.set_account("".into());
+                    ui.set_reading_time("".into());
+                    ui.set_weekly_reading_time("".into());
                     ui.set_books(ModelRc::new(VecModel::default()));
                     ui.set_page(1);
                 }
@@ -161,6 +170,15 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                         ui.set_account(format!("账号 {vid}").into());
                         ui.set_has_qr(false);
                         ui.set_qr_image(slint::Image::default());
+                        ui.set_reading_time("加载中…".into());
+                        ui.set_weekly_reading_time("加载中…".into());
+                    }
+                    Event::AccountMetrics {
+                        reading_time,
+                        weekly_reading_time,
+                    } => {
+                        ui.set_reading_time(reading_time.into());
+                        ui.set_weekly_reading_time(weekly_reading_time.into());
                     }
                     Event::Shelf(books) => {
                         let count = books.len();
@@ -217,10 +235,18 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                         ui.set_busy(false);
                         ui.set_has_qr(false);
                         ui.set_account("".into());
+                        ui.set_reading_time("".into());
+                        ui.set_weekly_reading_time("".into());
                         ui.set_books(ModelRc::new(VecModel::default()));
                         ui.set_status("点击登录，扫码查看微信读书书架".into());
                     }
                     Event::Failed(message) => {
+                        if ui.get_reading_time() == "加载中…" {
+                            ui.set_reading_time("暂不可用".into());
+                        }
+                        if ui.get_weekly_reading_time() == "加载中…" {
+                            ui.set_weekly_reading_time("暂不可用".into());
+                        }
                         ui.set_busy(false);
                         ui.set_has_qr(false);
                         ui.set_qr_image(slint::Image::default());
@@ -373,6 +399,42 @@ async fn execute(
         .apply_shelf_snapshot(&identity, books.clone(), None)
         .await?;
     emit(Event::Shelf(books.clone()));
+    // Account failures are independent of the shelf and of each other.
+    let current = credentials.as_ref().unwrap();
+    let (mut reading, mut weekly) =
+        tokio::join!(api.reading_time(current), api.weekly_reading_time(current));
+    if reading.as_ref().is_err_and(|e| e.auth) || weekly.as_ref().is_err_and(|e| e.auth) {
+        let refreshed = async {
+            let new = api.refresh(current).await?;
+            store.rotate_session(&identity, &new).await?;
+            Ok::<_, Error>(new)
+        }
+        .await;
+        match refreshed {
+            Ok(new) => {
+                *credentials = Some(new);
+                let current = credentials.as_ref().unwrap();
+                (reading, weekly) =
+                    tokio::join!(api.reading_time(current), api.weekly_reading_time(current));
+            }
+            Err(error) => {
+                if reading.as_ref().is_err_and(|e| e.auth) {
+                    reading = Err(error.clone());
+                }
+                if weekly.as_ref().is_err_and(|e| e.auth) {
+                    weekly = Err(error);
+                }
+            }
+        }
+    }
+    emit(Event::AccountMetrics {
+        reading_time: reading
+            .map(format_reading_time)
+            .unwrap_or_else(|_| "暂不可用".into()),
+        weekly_reading_time: weekly
+            .map(format_reading_time)
+            .unwrap_or_else(|_| "暂不可用".into()),
+    });
     let mut covers = stream::iter(books.into_iter().filter(|b| !b.cover.is_empty()))
         .map(|book| {
             let identity = &identity;
@@ -386,6 +448,14 @@ async fn execute(
         emit(Event::Cover { id, image });
     }
     Ok(())
+}
+
+fn format_reading_time(seconds: u64) -> String {
+    if (1..60).contains(&seconds) {
+        "不足 1 分钟".into()
+    } else {
+        format!("{} 小时 {} 分钟", seconds / 3600, seconds % 3600 / 60)
+    }
 }
 
 fn filtered_rows(all: &[ShelfRow], query: &str) -> Vec<ShelfRow> {
@@ -467,6 +537,8 @@ mod tests {
                 json!({"vid":"42","accessToken":"rotated","refreshToken":"rotated-refresh"}),
             ),
             (200, json!({"books":[{"bookId":"b","title":"Book"}]})),
+            (200, json!({"totalReadingTime":3661,"totalReadTime":1800})),
+            (200, json!({"totalReadingTime":3661,"totalReadTime":1800})),
         ]);
         let path = temporary();
         let store = Store::new(path.clone()).unwrap();
@@ -482,17 +554,142 @@ mod tests {
             store.load().await.unwrap().unwrap().refresh_token,
             "rotated-refresh"
         );
-        assert!(rx
-            .try_iter()
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(events
+            .iter()
             .any(|e| matches!(e,Event::Shelf(books) if books.len()==1)));
-        let requests: Vec<_> = (0..3).map(|_| mock.requests.recv().unwrap()).collect();
+        assert!(events.iter().any(
+            |e| matches!(e, Event::AccountMetrics { reading_time, weekly_reading_time }
+            if reading_time == "1 小时 1 分钟" && weekly_reading_time == "0 小时 30 分钟")
+        ));
+        let requests: Vec<_> = (0..5).map(|_| mock.requests.recv().unwrap()).collect();
         assert!(requests[1].starts_with("POST /login "));
         assert!(requests[2].contains("accesstoken: rotated"));
+        assert!(requests[3..]
+            .iter()
+            .all(|r| r.contains("accesstoken: rotated")));
         execute(&mock.api, &store, &mut current, Action::Logout, &|_| {})
             .await
             .unwrap();
         assert!(current.is_none());
         assert!(store.load().await.unwrap().is_none());
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+        mock.finish();
+    }
+
+    #[tokio::test]
+    async fn missing_weekly_time_does_not_hide_total_reading_time_or_shelf() {
+        let mock = Mock::new(vec![
+            (200, json!({"books":[]})),
+            (200, json!({"totalReadingTime":0})),
+            (200, json!({"totalReadingTime":0})),
+        ]);
+        let path = temporary();
+        let store = Store::new(path.clone()).unwrap();
+        store.save(&credentials()).await.unwrap();
+        let events = RefCell::new(Vec::new());
+        execute(&mock.api, &store, &mut None, Action::Restore, &|e| {
+            events.borrow_mut().push(e)
+        })
+        .await
+        .unwrap();
+        assert!(events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, Event::Shelf(books) if books.is_empty())));
+        assert!(events.borrow().iter().any(
+            |e| matches!(e, Event::AccountMetrics { reading_time, weekly_reading_time }
+            if reading_time == "0 小时 0 分钟" && weekly_reading_time == "暂不可用")
+        ));
+        let requests: Vec<_> = (0..3).map(|_| mock.requests.recv().unwrap()).collect();
+        assert!(requests
+            .iter()
+            .any(|r| r.starts_with("GET /user/profile?userVid=42&totalReadingTime=1 ")));
+        assert!(requests
+            .iter()
+            .any(|r| r.starts_with("GET /readdata/detail?mode=weekly&baseTime=")));
+        let weekly_request = requests
+            .iter()
+            .find(|r| r.starts_with("GET /readdata/detail?"))
+            .unwrap();
+        let request_path = weekly_request.split_whitespace().nth(1).unwrap();
+        let url = reqwest::Url::parse(&format!("http://localhost{request_path}")).unwrap();
+        let base_time: u64 = url
+            .query_pairs()
+            .find(|(key, _)| key == "baseTime")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(
+            base_time <= now && now - base_time < 60,
+            "current week must be anchored in Unix seconds"
+        );
+        assert!(!requests.iter().any(|r| r.contains("/pay/")));
+        assert!(requests
+            .iter()
+            .all(|r| r.contains("vid: 42") && r.contains("accesstoken: test-access")));
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+        mock.finish();
+    }
+
+    #[test]
+    fn reading_time_formats_minutes_without_rounding_up() {
+        assert_eq!(format_reading_time(0), "0 小时 0 分钟");
+        assert_eq!(format_reading_time(59), "不足 1 分钟");
+        assert_eq!(format_reading_time(60), "0 小时 1 分钟");
+        assert_eq!(format_reading_time(3659), "1 小时 0 分钟");
+        assert_eq!(format_reading_time(360000), "100 小时 0 分钟");
+    }
+
+    #[tokio::test]
+    async fn account_metrics_share_one_token_refresh_and_retry_once() {
+        let mock = Mock::new(vec![
+            (200, json!({"books":[]})),
+            (401, json!({})),
+            (200, json!({"errCode":-2012})),
+            (
+                200,
+                json!({"accessToken":"metrics-access","refreshToken":"metrics-refresh"}),
+            ),
+            (200, json!({"totalReadingTime":7200,"totalReadTime":0})),
+            (200, json!({"totalReadingTime":7200,"totalReadTime":0})),
+        ]);
+        let path = temporary();
+        let store = Store::new(path.clone()).unwrap();
+        store.save(&credentials()).await.unwrap();
+        let events = RefCell::new(Vec::new());
+        let mut current = None;
+        execute(&mock.api, &store, &mut current, Action::Restore, &|e| {
+            events.borrow_mut().push(e)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            store.load().await.unwrap().unwrap().refresh_token,
+            "metrics-refresh"
+        );
+        assert!(events.borrow().iter().any(
+            |e| matches!(e, Event::AccountMetrics { reading_time, weekly_reading_time }
+            if reading_time == "2 小时 0 分钟" && weekly_reading_time == "0 小时 0 分钟")
+        ));
+        let requests: Vec<_> = (0..6).map(|_| mock.requests.recv().unwrap()).collect();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("POST /login "))
+                .count(),
+            1
+        );
+        assert!(requests[4..]
+            .iter()
+            .all(|r| r.contains("accesstoken: metrics-access")));
         drop(store);
         std::fs::remove_dir_all(path).unwrap();
         mock.finish();

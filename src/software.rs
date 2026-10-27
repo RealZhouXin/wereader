@@ -178,6 +178,22 @@ mod tests {
             ui.get_account_open(),
             "profile navigation must open the account panel"
         );
+        ui.set_account("账号 42".into());
+        ui.set_reading_time("1234 小时 56 分钟".into());
+        ui.set_weekly_reading_time("12 小时 30 分钟".into());
+        window.request_redraw();
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 600);
+        }));
+        let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+        image::save_buffer(
+            "/tmp/rereader-account-test.png",
+            &rgb,
+            600,
+            800,
+            image::ColorType::Rgb8,
+        )
+        .unwrap();
         ui.set_query("莫言".into());
         click(130.0, 774.0);
         assert!(

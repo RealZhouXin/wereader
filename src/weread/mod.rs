@@ -1,5 +1,6 @@
 //! E-ink client protocol, ported from weread-omni (see THIRD_PARTY_NOTICES.md).
 mod covers;
+mod profile;
 pub use covers::{cached_cover, Cover};
 #[cfg(test)]
 pub(crate) mod tests;
@@ -306,6 +307,36 @@ impl Api {
             )
             .await?;
         parse_shelf(&value)
+    }
+    pub async fn reading_time(&self, credentials: &Credentials) -> Result<u64> {
+        let value = self
+            .send(
+                self.http
+                    .get(format!("{}/user/profile", self.api))
+                    .header("vid", &credentials.vid)
+                    .header("accessToken", &credentials.access_token)
+                    .query(&[
+                        ("userVid", credentials.vid.as_str()),
+                        ("totalReadingTime", "1"),
+                    ]),
+            )
+            .await?;
+        profile::parse_reading_time(&value)
+    }
+    pub async fn weekly_reading_time(&self, credentials: &Credentials) -> Result<u64> {
+        let value = self
+            .send(
+                self.http
+                    .get(format!("{}/readdata/detail", self.api))
+                    .query(&[
+                        ("mode", "weekly".to_owned()),
+                        ("baseTime", (timestamp()? / 1000).to_string()),
+                    ])
+                    .header("vid", &credentials.vid)
+                    .header("accessToken", &credentials.access_token),
+            )
+            .await?;
+        profile::parse_weekly_reading_time(&value)
     }
 }
 fn integer(value: &Value) -> Option<i64> {

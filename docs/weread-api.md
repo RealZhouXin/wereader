@@ -69,6 +69,19 @@
 
 来源：[笔记实现][native-notes]。其他书评写入接口可继续查阅[端点目录][native-catalog]，不纳入阅读 MVP。
 
+### 1.4 用户页累计与本周阅读时长
+
+2026-10-27 已接入用户页展示，端点依据 [weread-omni 客户端目录][native-catalog]和[阅读统计实现](https://github.com/teng-lin/weread-omni/blob/main/src/api/resources/read-data.ts)。
+
+| 功能 | 方法/路径 | 本地解析契约 |
+| --- | --- | --- |
+| 累计阅读时长 | `GET /user/profile?userVid=<vid>&totalReadingTime=1` | 顶层 `totalReadingTime`，按秒转为小时、分钟 |
+| 本周阅读时间 | `GET /readdata/detail?mode=weekly&baseTime=<当前 Unix 秒>` | 顶层 `totalReadTime`，按秒转为小时、分钟；以当前时间定位服务端本周统计 |
+
+两项请求携带现有墨水屏客户端版本头、`vid` 和 `accessToken`。登录、恢复会话及书架刷新成功后请求；鉴权过期时合并刷新一次 token 并保存，再重试两项请求。单项缺失、格式错误或网络失败仅将该项显示为“暂不可用”，不会把未知数据当成 0，也不会清除已加载的书架。登出清除页面中的账号数据；当前未持久化用户统计。
+
+这些响应字段及单位已有本地模拟响应和边界测试，真实账号返回结构和服务端周统计边界仍需账号联调，Kindle 真机显示仍待验证。设备时钟应保持正确；每次成功刷新都以当前 Unix 秒重新定位本周，不在本地累加或截取最近七天。
+
 ## 2. 正文下载与进度写回：待验证接口
 
 客户端整理文档列出：
