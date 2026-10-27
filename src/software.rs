@@ -67,6 +67,7 @@ mod tests {
             .unwrap();
         ui.set_logged_in(true);
         ui.set_status("共 13 本书".into());
+        ui.set_total_books(13);
         ui.set_books(slint::ModelRc::new(slint::VecModel::from(
             (0..13)
                 .map(|i| crate::ShelfRow {
@@ -140,6 +141,54 @@ mod tests {
             image::ColorType::Rgb8,
         )
         .unwrap();
+        // Check the same adaptive layout at the prototype's native dimensions.
+        window.set_size(slint::PhysicalSize::new(820, 1060));
+        window.request_redraw();
+        let mut native = vec![slint::Rgb8Pixel::default(); 820 * 1060];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut native, 820);
+        }));
+        let rgb: Vec<u8> = native.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+        image::save_buffer(
+            "/tmp/rereader-shelf-native-test.png",
+            &rgb,
+            820,
+            1060,
+            image::ColorType::Rgb8,
+        )
+        .unwrap();
+        window.set_size(slint::PhysicalSize::new(600, 800));
+
+        // Exercise the bottom navigation through actual pointer hit areas.
+        let click = |x, y| {
+            let position = slint::LogicalPosition::new(x, y);
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+        };
+        click(217.0, 774.0);
+        assert!(
+            ui.get_account_open(),
+            "profile navigation must open the account panel"
+        );
+        ui.set_query("莫言".into());
+        click(130.0, 774.0);
+        assert!(
+            !ui.get_account_open(),
+            "shelf navigation must close the account panel"
+        );
+        assert!(
+            ui.get_query().is_empty(),
+            "shelf navigation must clear search"
+        );
+
         // Regression: tall, wide and ordinary covers must never overlap the
         // caption. Solid blue isolates cover bounds from dark caption glyphs.
         for index in 0..model.row_count() {
@@ -192,6 +241,8 @@ mod tests {
             }
         }
         ui.set_logged_in(false);
+        ui.set_busy(true);
+        ui.set_status("请使用微信扫码，在手机上确认登录".into());
         ui.set_qr_image(
             crate::app::qr_image("https://open.weixin.qq.com/connect/confirm?uuid=test").unwrap(),
         );

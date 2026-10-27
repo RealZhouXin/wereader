@@ -58,7 +58,7 @@ impl Drop for Controller {
 }
 
 pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
-    let store = Store::new(Store::default_path()?);
+    let store = Store::new(Store::default_path()?)?;
     let api = Api::new()?;
     ui.set_busy(true);
     ui.set_status("正在恢复登录…".into());
@@ -281,21 +281,21 @@ async fn execute(
 ) -> weread::Result<()> {
     match action {
         Action::Restore => {
-            *credentials = store.load()?;
+            *credentials = store.load().await?;
             if credentials.is_none() {
                 emit(Event::SignedOut);
                 return Ok(());
             }
         }
         Action::Logout => {
-            store.clear()?;
+            store.clear().await?;
             *credentials = None;
             emit(Event::SignedOut);
             return Ok(());
         }
         Action::Login => {
             // Remove the old account before obtaining a new session.
-            store.clear()?;
+            store.clear().await?;
             let device = credentials
                 .as_ref()
                 .map(|c| c.device_id.clone())
@@ -309,7 +309,7 @@ async fn execute(
             let code = loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
-                    return Err(Error::new("二维码已过期，请点击登录 / 换码重试"));
+                    return Err(Error::new("二维码已过期，请重新扫码登录"));
                 }
                 let (code, state) = api
                     .poll(&uuid, last, remaining.min(Duration::from_secs(65)))
@@ -317,8 +317,8 @@ async fn execute(
                 last = Some(code);
                 match state {
                     Poll::Confirmed(code) => break code,
-                    Poll::Expired => return Err(Error::new("二维码已过期，请点击登录 / 换码重试")),
-                    Poll::Declined => return Err(Error::new("已取消授权，请点击登录 / 换码重试")),
+                    Poll::Expired => return Err(Error::new("二维码已过期，请重新扫码登录")),
+                    Poll::Declined => return Err(Error::new("已取消授权，请重新扫码登录")),
                     Poll::Scanned => emit(Event::Status("已扫码，请在手机上确认登录".into())),
                     Poll::Waiting => {}
                 }
@@ -326,7 +326,7 @@ async fn execute(
             };
             emit(Event::Status("正在确认账号…".into()));
             let new = api.exchange(&code, &device).await?;
-            store.save(&new)?;
+            store.save(&new).await?;
             *credentials = Some(new);
         }
         Action::Refresh => {}
@@ -335,26 +335,49 @@ async fn execute(
     let old = credentials
         .as_ref()
         .ok_or_else(|| Error::new("Sign in before refreshing your shelf."))?;
+    let identity = store
+        .identity()
+        .await?
+        .ok_or_else(|| Error::new("Sign in before loading data."))?;
+    if identity.account_id != old.vid {
+        return Err(Error::new(
+            "Account session changed. Please restore or sign in again.",
+        ));
+    }
     emit(Event::SignedIn(old.vid.clone()));
+    let cached = store.load_shelf(&identity).await?;
+    if !cached.is_empty() {
+        emit(Event::Shelf(cached.clone()));
+        for book in &cached {
+            if let Some(image) = weread::cached_cover(store, &identity, book).await {
+                emit(Event::Cover {
+                    id: book.id.clone(),
+                    image: Some(image),
+                });
+            }
+        }
+    }
     emit(Event::Status("正在加载书架…".into()));
     let books = match api.shelf(old).await {
         Ok(books) => books,
         Err(error) if error.auth => {
             let new = api.refresh(old).await?;
             // Persist rotating refresh tokens before the shelf retry.
-            store.save(&new)?;
+            store.rotate_session(&identity, &new).await?;
             *credentials = Some(new);
             api.shelf(credentials.as_ref().unwrap()).await?
         }
         Err(error) => return Err(error),
     };
+    store
+        .apply_shelf_snapshot(&identity, books.clone(), None)
+        .await?;
     emit(Event::Shelf(books.clone()));
-    let account = credentials.as_ref().unwrap().vid.clone();
     let mut covers = stream::iter(books.into_iter().filter(|b| !b.cover.is_empty()))
         .map(|book| {
-            let account = &account;
+            let identity = &identity;
             async move {
-                let image = api.cover(store, account, &book.cover).await.ok();
+                let image = api.cover(store, identity, &book).await.ok();
                 (book.id, image)
             }
         })
@@ -446,8 +469,8 @@ mod tests {
             (200, json!({"books":[{"bookId":"b","title":"Book"}]})),
         ]);
         let path = temporary();
-        let store = Store::new(path.clone());
-        store.save(&credentials()).unwrap();
+        let store = Store::new(path.clone()).unwrap();
+        store.save(&credentials()).await.unwrap();
         let (tx, rx) = mpsc::channel();
         let mut current = None;
         execute(&mock.api, &store, &mut current, Action::Restore, &|event| {
@@ -456,7 +479,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            store.load().unwrap().unwrap().refresh_token,
+            store.load().await.unwrap().unwrap().refresh_token,
             "rotated-refresh"
         );
         assert!(rx
@@ -469,7 +492,42 @@ mod tests {
             .await
             .unwrap();
         assert!(current.is_none());
-        assert!(store.load().unwrap().is_none());
+        assert!(store.load().await.unwrap().is_none());
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+        mock.finish();
+    }
+
+    #[tokio::test]
+    async fn network_failure_keeps_the_cached_shelf_visible() {
+        let mock = Mock::new(vec![(503, json!({}))]);
+        let path = temporary();
+        let store = Store::new(path.clone()).unwrap();
+        let identity = store.save(&credentials()).await.unwrap();
+        let book = Book {
+            id: "offline".into(),
+            title: "离线书架".into(),
+            author: String::new(),
+            cover: String::new(),
+            finished: false,
+        };
+        store
+            .apply_shelf_snapshot(&identity, vec![book.clone()], None)
+            .await
+            .unwrap();
+        let events = RefCell::new(Vec::new());
+        let mut current = None;
+        let result = execute(&mock.api, &store, &mut current, Action::Restore, &|e| {
+            events.borrow_mut().push(e)
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e,Event::Shelf(books) if books==&vec![book.clone()])));
+        assert_eq!(store.load_shelf(&identity).await.unwrap(), vec![book]);
+        drop(store);
         std::fs::remove_dir_all(path).unwrap();
         mock.finish();
     }
@@ -481,7 +539,7 @@ mod tests {
         let path = temporary();
         let (tx, rx) = channel::unbounded_channel();
         let (events, updates) = mpsc::channel();
-        let task = tokio::spawn(run(api, Store::new(path.clone()), rx, events));
+        let task = tokio::spawn(run(api, Store::new(path.clone()).unwrap(), rx, events));
         tx.send(Command {
             generation: 1,
             action: Action::Login,
@@ -518,5 +576,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!path.join("session.json").exists());
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

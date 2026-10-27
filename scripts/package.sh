@@ -6,6 +6,7 @@ case "$target" in
     armv7-unknown-linux-musleabihf|arm-unknown-linux-musleabi) ;;
     *) echo "Unsupported package target: $target" >&2; exit 1 ;;
 esac
+sh scripts/setup-musl-headers.sh "$target"
 cargo build --locked --release --no-default-features --features kindle --target "$target"
 # Snapshot the matching source and dependencies before publishing either archive.
 mkdir -p dist
@@ -16,6 +17,10 @@ mkdir -p "$source_dir/.cargo"
 cp Cargo.toml Cargo.lock build.rs README.md LICENSE THIRD_PARTY_NOTICES.md SOURCE.md "$source_dir/"
 cp -R src ui assets scripts packaging docs "$source_dir/"
 cp .cargo/config.toml "$source_dir/.cargo/"
+# Retain the exact C-header sources for offline rebuilding and their MIT notice.
+mkdir -p "$source_dir/.toolchains"
+cp .toolchains/musl-1.2.5.tar.gz "$source_dir/.toolchains/"
+cp .toolchains/musl-COPYRIGHT "$source_dir/.toolchains/"
 if [ -d vendor ]; then
     # Repackaging an extracted source archive: retain its source replacement config.
     cp -R vendor "$source_dir/"
@@ -44,6 +49,8 @@ for dependency in "$source_dir"/vendor/*; do
         cp "$notice" "$notice_dir/"
     done
 done
+mkdir -p "$dest/rereader/licenses/musl-1.2.5"
+cp .toolchains/musl-COPYRIGHT "$dest/rereader/licenses/musl-1.2.5/COPYRIGHT"
 cp assets/Tuffy-LICENSE.txt "$dest/rereader/"
 cp assets/NotoSansSC-LICENSE.txt "$dest/rereader/"
 chmod 755 "$dest/rereader/start.sh" "$dest/rereader/bin/rereader"

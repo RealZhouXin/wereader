@@ -1,13 +1,10 @@
-mod app;
 mod software;
-mod weread;
+#[cfg(test)]
+use rereader::ShelfRow;
+use rereader::{app, AppWindow, DEFAULT_FONT};
 
 use slint::ComponentHandle;
 use std::{env, error::Error, path::PathBuf};
-
-slint::include_modules!();
-
-const DEFAULT_FONT: &[u8] = include_bytes!("../assets/NotoSansSC-Regular.otf");
 
 #[derive(Default, Debug)]
 struct Options {

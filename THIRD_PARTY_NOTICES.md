@@ -20,6 +20,18 @@ is offered under MIT OR Apache-2.0; this distribution selects MIT.
 Its `LICENSE-MIT` is included in the Kindle package as
 `slint-backend-kindle-LICENSE-MIT` and in the vendored source archive.
 
+## SQLite storage and musl C headers
+
+`rusqlite` 0.41.0 and `libsqlite3-sys` 0.39.1 retain their MIT licenses.
+SQLite is compiled from the bundled source in `libsqlite3-sys`; its source
+contains the upstream public-domain declaration. Cargo vendoring and the
+license-copying package step include the crate sources and notices.
+
+ARM builds use musl 1.2.5 headers from the pinned source tarball. The source
+archive retains `.toolchains/musl-1.2.5.tar.gz` and `musl-COPYRIGHT`;
+the binary package includes `licenses/musl-1.2.5/COPYRIGHT`.
+The header setup script verifies the tarball SHA-256 before extraction.
+
 ## weread-omni
 
 The E-ink protocol implementation in `src/weread/` is adapted from

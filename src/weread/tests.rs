@@ -214,38 +214,6 @@ async fn errors_and_refresh_rotation_are_checked() {
 }
 
 #[test]
-fn credentials_are_private_atomic_and_removable() {
-    let path = temporary();
-    let store = Store::new(path.clone());
-    assert!(store.load().unwrap().is_none());
-    store.save(&credentials()).unwrap();
-    assert_eq!(store.load().unwrap().unwrap().vid, "42");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        assert_eq!(
-            std::fs::metadata(path.join("session.json"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-    assert!(!path.join("session.json.part").exists());
-    std::fs::write(path.join("session.json"), "{}").unwrap();
-    assert!(store.load().is_err());
-    store.clear().unwrap();
-    store.clear().unwrap();
-    assert!(store.load().unwrap().is_none());
-    std::fs::remove_dir_all(path).unwrap();
-}
-
-#[test]
 fn empty_shelf_is_valid_but_missing_shelf_is_not() {
     assert!(parse_shelf(&json!({"books":[]})).unwrap().is_empty());
     assert!(parse_shelf(&json!({})).is_err());

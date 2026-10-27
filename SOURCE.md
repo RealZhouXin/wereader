@@ -15,12 +15,15 @@ rereader 采用 GPL-3.0-only，不提供任何担保。完整许可见 `LICENSE`
 ## 重建和安装
 
 解压源码包并进入 `rereader-source/`。需要 Rust 1.92 或更新版本、Cargo、clang、
-tar 和目标 Rust 标准库；这些通用工具不包含在源码包中。
+make、tar、sha256sum 和目标 Rust 标准库；这些通用工具不包含在源码包中。
 `BUILD_INFO` 记录原构建的目标及 Rust/Cargo 版本，`Cargo.lock` 固定依赖版本。
 `.cargo/config.toml` 已配置使用包内的 `vendor/`，不需要从 crates.io 下载依赖。
+源码包另含 `.toolchains/musl-1.2.5.tar.gz` 与版权声明；头文件准备脚本校验 SHA-256，
+从包内源码生成 ARM C 头文件，离线重建时无需下载 musl。SQLite C 源码随 Cargo 依赖提供。
 
 ```sh
 rustup target add armv7-unknown-linux-musleabihf
+sh scripts/setup-musl-headers.sh armv7-unknown-linux-musleabihf
 cargo build --offline --locked --release --no-default-features --features kindle \
   --target armv7-unknown-linux-musleabihf
 # 生成可安装包和新的对应源码包

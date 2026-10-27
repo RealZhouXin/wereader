@@ -9,12 +9,13 @@
 - [接口清单与接入安排](docs/weread-api.md)：登录、书架、目录、笔记及正文/进度待验证接口。
 - [源码研究与移植安排](docs/weread-eink-research.md)：设备配置、会话契约、传输行为和 Rust 实施顺序。
 - [wxBook 墨水屏实现研究](docs/wxbook-interface-research.md)：正文、进度及缓存实现参考；其 HTTP 层采用独立的 Web 会话协议。
+- [SQLite 与本地文件存储设计](docs/storage-design.md)：账号、书架、进度、笔记和同步表结构，以及正文/图片文件索引；附建表 SQL、迁移与 Rust 存储接口。
 
 ## 扫码登录与书架
 
-运行 `cargo run`，点击 **登录 / 换码**，使用微信扫描二维码并在手机上确认。登录成功后加载电子书书架，以每页 4 列 × 3 行展示封面和书名；底部箭头翻页，**刷新** 更新书架，**退出登录** 删除本地登录凭据。顶部支持按书名或作者搜索，读完的书显示标记。当前只展示电子书列表，不提供打开正文或有声书入口。
+运行 `cargo run`，点击 **微信扫码登录**，使用微信扫描二维码并在手机上确认。登录成功后加载电子书书架，以每页 4 列 × 3 行展示封面和书名；底部箭头翻页，**刷新** 更新书架，**退出登录** 删除本地登录凭据，保留该账号的书架、进度和笔记供下次登录恢复。顶部支持按书名或作者搜索，读完的书显示标记。当前只展示电子书列表，不提供打开正文或有声书入口。
 
-**登录 / 换码** 会取消旧登录并生成新二维码；**取消** 取消登录并清除本地会话。二维码过期、用户拒绝、网络失败和服务端验证要求都会显示状态。退出应用保留登录，重启后自动恢复书架；token 过期时刷新一次并保存轮换后的凭据。
+**更换二维码** 会取消旧登录并生成新二维码；**取消** 取消登录并清除本地会话。二维码过期、用户拒绝、网络失败和服务端验证要求都会显示状态。退出应用保留登录，重启后先显示本地书架与封面，再尝试网络更新；token 过期时刷新一次并保存轮换后的凭据。
 
 已内置 Noto Sans SC 中文字体，桌面和 Kindle 无需额外安装字体即可显示中文书名；仍可注册补充字体：
 
@@ -22,9 +23,13 @@
 cargo run -- --font /path/to/chinese-font.ttf
 ```
 
-桌面会话默认保存于 `$XDG_DATA_HOME/rereader/session.json`，未设置时使用 `~/.local/share/rereader/session.json`；可用 `REREADER_DATA_DIR` 指定专用目录。Kindle 启动器默认使用 `/var/local/rereader/`，支持通过同一环境变量覆盖；目录需要可写并支持 Unix 权限。目录权限为 `0700`、凭据文件为 `0600`，凭据不会写入应用日志。
+桌面数据库默认保存于 `$XDG_DATA_HOME/rereader/rereader.sqlite3`，未设置时使用 `~/.local/share/rereader/rereader.sqlite3`；可用 `REREADER_DATA_DIR` 指定专用目录。Kindle 启动器默认使用 `/var/local/rereader/`，支持通过同一环境变量覆盖；目录需要可写并支持 Unix 权限。目录权限为 `0700`、数据库和缓存文件为 `0600`，凭据不会写入应用日志。首次启动会事务导入有效旧 `session.json`，成功后移除旧文件；已有数据库时不再次导入，避免登出后旧 token 恢复。损坏的旧会话不导入，需要重新登录。
 
-封面在后台并发加载并转换为灰度缩略图，缓存在会话目录下的 `covers/`，缓存键按账号与封面 URL 隔离；加载失败时显示书名占位，不影响翻页和搜索。仅从允许的腾讯图片域名加载，不向封面主机发送账号 token。
+封面在后台并发加载并转换为灰度缩略图，保存在数据目录下的 `images/<account_hash>/cover/`，SQLite 记录文件索引、版本、校验值与路径，缓存键按账号与封面 URL 隔离；加载失败时显示书名占位，不影响翻页和搜索。仅从允许的腾讯图片域名加载，不向封面主机发送账号 token。
+
+存储层位于 `src/storage/`，SQLite 和文件 I/O 由独立线程串行处理，支持账号隔离、章节、正文/插图文件索引、双端进度快照、笔记/书签/划线、阅读设置和持久化同步队列。正文阅读及笔记 UI 尚未接入；进度和笔记的远端写协议验证后，调用方才可启用对应同步任务。
+
+界面参考 [电子书书架原型](https://www.figma.com/design/wAVCmw7NPd6vFnUzllfJS0?node-id=3-2)，使用暖纸色背景、细线搜索框、4×3 封面网格和底部胶囊翻页控件，按窗口尺寸缩放。顶部显示实际书籍总数和同步状态；底部罗盘用于同步书架，书本返回完整书架，人像打开账号页，可退出登录或退出应用。原型的导入、选择和发现业务尚未接入，顶部提供现有刷新与账号操作。封面继续使用账号书架的真实图片，缺失或加载失败时显示书名和作者。
 
 协议层位于 `src/weread/`，后台任务与 Slint 状态绑定位于 `src/app.rs`。网络请求支持取消，界面按操作代次丢弃旧结果。开发预览截图不启动网络或读取账号。
 
@@ -46,10 +51,12 @@ Kindle 的显示、触摸和事件循环直接交给上游后端，不需要额�
 
 ## 构建 Kindle 安装包
 
-需要可执行的 `clang`（用于 TLS 依赖的 ARM C/汇编代码）；Rust 链接继续使用 `rust-lld`。可通过目标专用的 `CC_armv7_unknown_linux_musleabihf` 覆盖 C 编译器。
+需要可执行的 `clang`、`make`、`curl`、`tar`、`sha256sum`。SQLite 与 TLS 的 ARM C 代码使用 `scripts/clang-musl.sh`；首次构建需安装固定 musl 1.2.5 头文件，Rust 提供静态 libc 和 `rust-lld`。可通过目标专用的 `CC_armv7_unknown_linux_musleabihf` 覆盖 C 编译器，或用 `REREADER_MUSL_SYSROOT` 指定具有 `include/` 的自备 musl sysroot。
 
 ```sh
 rustup target add armv7-unknown-linux-musleabihf
+# package.sh 会自动准备头文件；直接 cargo build 前先手动执行此步
+sh scripts/setup-musl-headers.sh armv7-unknown-linux-musleabihf
 sh scripts/package.sh
 ```
 
@@ -77,6 +84,7 @@ sh /mnt/us/rereader/start.sh --black-and-white
 
 ```sh
 rustup target add arm-unknown-linux-musleabi
+sh scripts/setup-musl-headers.sh arm-unknown-linux-musleabi
 sh scripts/package.sh arm-unknown-linux-musleabi
 ```
 
@@ -118,7 +126,7 @@ Slint 选择 GPLv3 许可，包含 Slint 的桌面及 Kindle 完整程序均按 
 
 ## 当前验证
 
-本地测试覆盖模拟扫码登录、token 刷新轮换、书架解析、封面缓存与地址校验、中文字体字形、搜索、会话文件权限、取消请求及网格/二维码渲染；Clippy 检查通过。另有默认忽略的在线二维码测试，已实际通过匿名票据和二维码创建请求；尚未使用账号扫码确认或验证真实书架。
+本地测试覆盖模拟扫码登录、token 刷新轮换、书架解析、封面缓存与地址校验、中文字体字形、搜索、取消请求及网格/二维码渲染；存储测试另覆盖旧会话迁移、权限、版本升级、账号代次、事务回滚、进度/注释并发修改、同步 ACK、结果不确定恢复、文件校验及 LRU。Clippy 检查通过。另有默认忽略的在线二维码测试，已实际通过匿名票据和二维码创建请求；尚未使用账号扫码确认或验证真实书架。
 
 已通过 ARMv7 musl 静态 release 构建。Kindle 真机运行尚未验证；软浮点目标目前仅提供构建配置。
 

@@ -1,10 +1,9 @@
 //! E-ink client protocol, ported from weread-omni (see THIRD_PARTY_NOTICES.md).
 mod covers;
-mod store;
-pub use covers::Cover;
+pub use covers::{cached_cover, Cover};
 #[cfg(test)]
 pub(crate) mod tests;
-pub use store::Store;
+pub use crate::storage::Store;
 
 use rand::Rng;
 use reqwest::{header::HeaderMap, Client, RequestBuilder};
@@ -17,7 +16,7 @@ use std::{
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Error {
     pub message: String,
     pub auth: bool,
