@@ -26,14 +26,19 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Enable only after confirming these framework processes on your model.
-if [ "${KINDLE_MANAGE_FRAMEWORK:-0}" = 1 ]; then
+# Own the display while the app runs; cleanup resumes only processes we paused.
+# Set KINDLE_MANAGE_FRAMEWORK=0 for device debugging without pausing the framework.
+if [ "${KINDLE_MANAGE_FRAMEWORK:-1}" = 1 ]; then
     for name in awesome cvm KPPMainApp; do
         for pid in $(pidof "$name" 2>/dev/null || :); do
             # Leave processes which were already stopped untouched.
-            if ! grep -q '^State:.*[Tt]' "/proc/$pid/status" 2>/dev/null; then
-                paused="$paused $pid"
-                kill -STOP "$pid" 2>/dev/null || :
+            if [ -r "/proc/$pid/status" ] &&
+                ! grep -q '^State:[[:space:]]*[Tt][[:space:]]' "/proc/$pid/status"; then
+                if kill -STOP "$pid" 2>/dev/null; then
+                    paused="$paused $pid"
+                else
+                    echo "Unable to pause framework process: $name ($pid)" >&2
+                fi
             fi
         done
     done

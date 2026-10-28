@@ -101,14 +101,19 @@ sh scripts/package.sh arm-unknown-linux-musleabi
 
 ## 系统界面与恢复
 
-启动器默认不暂停系统框架。若系统界面抢占屏幕，确认机型的进程后可从 SSH 使用：
+通过 KUAL、文档入口或 `sh /mnt/us/rereader/start.sh` 启动时，启动器默认先暂停
+亚马逊官方框架的 `awesome`、`cvm`、`KPPMainApp` 现有进程，再进入应用。
+点击应用内“退出应用”后，启动器恢复本次成功暂停的 PID；应用报错、崩溃或启动器收到
+HUP/INT/TERM 时也执行恢复。启动前已经暂停的进程保持原状态。
+直接运行 `bin/rereader --device` 不经过启动器，不会管理官方框架。
+
+调试时如需保留官方框架运行，可显式关闭：
 
 ```sh
-KINDLE_MANAGE_FRAMEWORK=1 sh /mnt/us/rereader/start.sh
+KINDLE_MANAGE_FRAMEWORK=0 sh /mnt/us/rereader/start.sh
 ```
 
-此选项会暂停 `awesome`、`cvm`、`KPPMainApp` 的现有进程，并在正常退出、应用报错
-或收到 HUP/INT/TERM 时恢复本次暂停的 PID。它不能处理断电、内核崩溃、启动器被
+恢复通过 `SIGCONT` 继续原进程，不重启官方框架。它不能处理断电、内核崩溃、启动器被
 SIGKILL 等情况；首次调试保留 SSH 通道，异常时重启设备。锁位于
 `/tmp/rereader.lock`，重启后仍有锁时，先确认无运行实例再移除空锁目录。
 日志位于 `/mnt/us/rereader/logs/`，按启动时间生成。
