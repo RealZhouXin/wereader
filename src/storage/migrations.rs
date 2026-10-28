@@ -49,7 +49,7 @@ impl Database {
         let connection = Connection::open(&path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(Error::new(
                 "Database was created by a newer rereader version.",
             ));
@@ -96,6 +96,11 @@ impl Database {
             tx.execute_batch(include_str!(
                 "../../docs/storage/002_annotation_conflicts.sql"
             ))?;
+            tx.commit()?;
+        }
+        if version < 3 {
+            let tx = db.connection.transaction()?;
+            tx.execute_batch(include_str!("../../docs/storage/003_shelf_groups.sql"))?;
             tx.commit()?;
         }
         // Once schema exists, never re-import an old token, even after logout.

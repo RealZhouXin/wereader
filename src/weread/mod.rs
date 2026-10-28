@@ -78,6 +78,17 @@ pub struct Book {
     pub cover: String,
     pub finished: bool,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShelfGroup {
+    pub id: String,
+    pub name: String,
+    pub book_ids: Vec<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShelfSnapshot {
+    pub books: Vec<Book>,
+    pub groups: Vec<ShelfGroup>,
+}
 #[derive(Debug, PartialEq)]
 pub enum Poll {
     Scanned,
@@ -298,6 +309,9 @@ impl Api {
         })
     }
     pub async fn shelf(&self, credentials: &Credentials) -> Result<Vec<Book>> {
+        Ok(self.shelf_snapshot(credentials).await?.books)
+    }
+    pub async fn shelf_snapshot(&self, credentials: &Credentials) -> Result<ShelfSnapshot> {
         let value = self
             .send(
                 self.http
@@ -306,7 +320,7 @@ impl Api {
                     .header("accessToken", &credentials.access_token),
             )
             .await?;
-        parse_shelf(&value)
+        parse_shelf_snapshot(&value)
     }
     pub async fn reading_time(&self, credentials: &Credentials) -> Result<u64> {
         let value = self
@@ -375,6 +389,40 @@ pub fn new_device_id() -> String {
         rand::rng().random::<u64>() & 0x7fff_ffff_ffff_ffff
     )
 }
+fn parse_shelf_snapshot(value: &Value) -> Result<ShelfSnapshot> {
+    let books = parse_shelf(value)?;
+    let mut groups = Vec::new();
+    if let Some(archive) = value.get("archive") {
+        let archive = archive
+            .as_array()
+            .ok_or_else(|| Error::new("Invalid shelf groups."))?;
+        let mut seen = std::collections::HashSet::new();
+        for group in archive {
+            let id = scalar(group.get("archiveId"))
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| Error::new("Shelf group has no identity."))?;
+            if !seen.insert(id.clone()) {
+                return Err(Error::new("Duplicate shelf group."));
+            }
+            let name = text(group, "name")?;
+            let ids = group
+                .get("bookIds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::new("Shelf group has no book list."))?;
+            let book_ids = ids
+                .iter()
+                .map(|id| {
+                    scalar(Some(id))
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| Error::new("Invalid book identity in shelf group."))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            groups.push(ShelfGroup { id, name, book_ids });
+        }
+    }
+    Ok(ShelfSnapshot { books, groups })
+}
+
 fn parse_shelf(value: &Value) -> Result<Vec<Book>> {
     let entries = value
         .get("books")

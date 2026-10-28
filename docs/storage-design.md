@@ -1,6 +1,6 @@
 # SQLite 与本地文件存储设计
 
-本文是 rereader 已实现的存储模块说明，入口为 `src/storage/mod.rs`，配套 [v1 建表 SQL](storage/001_initial.sql) 与 [v2 远端注释快照迁移](storage/002_annotation_conflicts.sql)。当前会话、书架和封面已接入；章节、进度、注释、设置与同步队列提供 Rust API，正文和笔记 UI、远端写回仍待业务接入。
+本文是 rereader 已实现的存储模块说明，入口为 `src/storage/mod.rs`，配套 [v1 建表 SQL](storage/001_initial.sql)、[v2 远端注释快照迁移](storage/002_annotation_conflicts.sql) 与 [v3 书架分组迁移](storage/003_shelf_groups.sql)。当前会话、书架和封面已接入；章节、进度、注释、设置与同步队列提供 Rust API，正文和笔记 UI、远端写回仍待业务接入。
 
 ## 1. 数据存储边界
 
@@ -9,7 +9,7 @@
 | 数据 | 存储方式 | 对应结构 |
 | --- | --- | --- |
 | 书籍 ID、名称、作者 | SQLite | `books` |
-| 书架、阅读进度 | SQLite | `shelf_entries`、`reading_positions` |
+| 书架、阅读进度 | SQLite | `shelf_entries`、`shelf_groups`、`reading_positions` |
 | 笔记、书签、划线 | SQLite | `annotations`，按 `kind` 区分 |
 | 网络同步状态 | SQLite | `sync_jobs`、`sync_cursors`、`reading_intervals` |
 | 书籍正文及章节内容 | 本地文件，SQLite 存索引 | `chapters`、`cached_files` |
@@ -65,6 +65,8 @@ $REREADER_DATA_DIR/              # 沿用 Store::default_path() 的目录选择
 `Book { id, title, author, cover, finished }` 对应 `books` 与 `shelf_entries` 的 JOIN，现有 UI 数据类型无需绑定数据库连接。
 
 完整书架响应成功解析后，在一个事务中 upsert 书籍、替换当前账号的 `shelf_entries` 并更新同步游标。只有协议确认是完整快照时才能以“缺失项”删除书架关系；增量响应必须按服务端增删语义应用。移出书架不删除 `books`、笔记、位置或离线文件。
+
+`shelf_groups(account_id, group_id)` 保存微信读书 `archive[]` 的名称、顺序和书籍 ID 列表（`book_ids_json` 为原始成员列表）。未知书籍 ID 也保留，界面计数和封面只使用当前电子书书架内的成员。`load_shelf_snapshot` 在同一事务中读取书籍和分组，`apply_shelf_snapshot_with_groups` 在同一事务中替换两者及游标，防止分组与书架错配。旧的 `apply_shelf_snapshot` 表示无分组的完整快照，会清除该账号旧分组。
 
 目录完整快照可事务替换；增量目录按 UID 合并及处理明确删除项。位置、笔记、缓存只保留逻辑 `chapter_uid`，不对易被替换的目录行建立删除级联；目录更新后发现章节不存在或版本改变，交给定位恢复逻辑处理。
 
@@ -211,7 +213,7 @@ record_sync_failure(identity, job_id, failure_class)
 
 当前模型只有一个存储工作线程，初始采用 `journal_mode=DELETE`、`synchronous=FULL`、`busy_timeout=5000`，并在每个连接、事务外开启 `foreign_keys=ON`。如后续确需独立读连接，再评估 WAL；它需要处理 `-wal`、`-shm` 和 checkpoint，不是当前单连接结构的前提。[SQLite 外键说明](https://www.sqlite.org/foreignkeys.html)、[WAL 说明](https://www.sqlite.org/wal.html)、[PRAGMA 配置](https://www.sqlite.org/pragma.html)。
 
-使用 `PRAGMA user_version` 管理 schema：新库为 0，成功执行 `001_initial.sql` 后为 1，再通过 `002_annotation_conflicts.sql` 升级到当前版本 2。v2 为注释增加 `remote_snapshot_json`，保存最近云端快照，冲突时保留本地与云端两个版本。迁移按版本依次执行，失败回滚，遇到更高版本拒绝写入而不是重建。初始 SQL 自带事务，不可再套一层事务，也不能每次启动重复执行；后续升级不要重放此文件或覆盖已有版本。迁移前通过 SQLite backup API 或停写并关闭数据库后复制做备份，不直接复制正在写入的数据库。
+使用 `PRAGMA user_version` 管理 schema：新库为 0，成功执行 `001_initial.sql` 后为 1，再通过 `002_annotation_conflicts.sql` 升级到版本 2，再通过 `003_shelf_groups.sql` 升级到当前版本 3，增加账号隔离的书架分组。v2 为注释增加 `remote_snapshot_json`，保存最近云端快照，冲突时保留本地与云端两个版本。迁移按版本依次执行，失败回滚，遇到更高版本拒绝写入而不是重建。初始 SQL 自带事务，不可再套一层事务，也不能每次启动重复执行；后续升级不要重放此文件或覆盖已有版本。迁移前通过 SQLite backup API 或停写并关闭数据库后复制做备份，不直接复制正在写入的数据库。
 
 实施顺序：
 

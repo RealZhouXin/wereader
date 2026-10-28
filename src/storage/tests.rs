@@ -5,6 +5,76 @@ use crate::weread::{
 };
 use sha2::{Digest, Sha256};
 
+#[tokio::test]
+async fn shelf_groups_are_atomic_persistent_and_account_scoped() {
+    use crate::weread::{ShelfGroup, ShelfSnapshot};
+    let (root, store, id) = setup().await;
+    let snapshot = ShelfSnapshot {
+        books: vec![book()],
+        groups: vec![
+            ShelfGroup {
+                id: "1".into(),
+                name: "文学".into(),
+                book_ids: vec!["book".into(), "absent".into()],
+            },
+            ShelfGroup {
+                id: "2".into(),
+                name: "空组".into(),
+                book_ids: vec![],
+            },
+        ],
+    };
+    store
+        .apply_shelf_snapshot_with_groups(&id, snapshot.clone(), None)
+        .await
+        .unwrap();
+    let mut invalid = snapshot.clone();
+    invalid.books[0].title = "Must roll back".into();
+    invalid.groups.push(invalid.groups[0].clone());
+    assert!(store
+        .apply_shelf_snapshot_with_groups(&id, invalid, None)
+        .await
+        .is_err());
+    assert_eq!(store.load_shelf_snapshot(&id).await.unwrap(), snapshot);
+    drop(store);
+    let store = Store::new(root.clone()).unwrap();
+    assert_eq!(store.load_shelf_snapshot(&id).await.unwrap(), snapshot);
+    let mut other = credentials();
+    other.vid = "other".into();
+    let other_id = store.save(&other).await.unwrap();
+    assert_eq!(
+        store.load_shelf_snapshot(&other_id).await.unwrap(),
+        ShelfSnapshot::default()
+    );
+    assert!(store.load_shelf_snapshot(&id).await.is_err());
+    let id = store.save(&credentials()).await.unwrap();
+    assert_eq!(store.load_shelf_snapshot(&id).await.unwrap(), snapshot);
+    store
+        .apply_shelf_snapshot_with_groups(&id, ShelfSnapshot::default(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.load_shelf_snapshot(&id).await.unwrap(),
+        ShelfSnapshot::default()
+    );
+    cleanup(root, store);
+}
+
+#[tokio::test]
+async fn v2_database_upgrades_with_existing_shelf_intact() {
+    let (root, store, id) = setup().await;
+    drop(store);
+    let conn = Connection::open(root.join("rereader.sqlite3")).unwrap();
+    conn.execute_batch("DROP TABLE shelf_groups; PRAGMA user_version=2;")
+        .unwrap();
+    drop(conn);
+    let store = Store::new(root.clone()).unwrap();
+    let snapshot = store.load_shelf_snapshot(&id).await.unwrap();
+    assert_eq!(snapshot.books, vec![book()]);
+    assert!(snapshot.groups.is_empty());
+    cleanup(root, store);
+}
+
 fn book() -> Book {
     Book {
         id: "book".into(),
@@ -723,7 +793,7 @@ async fn v1_database_upgrades_without_reimporting_old_session() {
         })
         .await
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert_eq!(title, "Saved book");
     cleanup(root, store);
 }

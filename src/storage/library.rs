@@ -1,5 +1,5 @@
 use super::*;
-use crate::weread::Book;
+use crate::weread::{Book, ShelfGroup, ShelfSnapshot};
 
 pub(super) fn cursor(
     tx: &Transaction<'_>,
@@ -14,13 +14,19 @@ pub(super) fn cursor(
 }
 impl Store {
     pub async fn load_shelf(&self, identity: &Identity) -> Result<Vec<Book>> {
+        Ok(self.load_shelf_snapshot(identity).await?.books)
+    }
+    pub async fn load_shelf_snapshot(&self, identity: &Identity) -> Result<ShelfSnapshot> {
         let identity = identity.clone();
         self.call(move |db| {
             let tx = db.connection.transaction()?;
             guard(&tx,&identity)?;
             let mut statement = tx.prepare("SELECT b.book_id,b.title,b.author,b.cover_url,s.finished FROM shelf_entries s JOIN books b USING(account_id,book_id) WHERE s.account_id=?1 ORDER BY s.sort_order,s.book_id")?;
-            let result = Ok(statement.query_map([identity.account_id], |r| Ok(Book { id:r.get(0)?,title:r.get(1)?,author:r.get(2)?,cover:r.get(3)?,finished:r.get(4)? }))?.collect::<rusqlite::Result<Vec<_>>>()?);
-            result
+            let books = statement.query_map([&identity.account_id], |r| Ok(Book { id:r.get(0)?,title:r.get(1)?,author:r.get(2)?,cover:r.get(3)?,finished:r.get(4)? }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut statement = tx.prepare("SELECT group_id,name,book_ids_json FROM shelf_groups WHERE account_id=?1 ORDER BY sort_order")?;
+            let raw = statement.query_map([&identity.account_id], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let groups = raw.into_iter().map(|(id,name,ids)| Ok(ShelfGroup { id, name, book_ids: serde_json::from_str(&ids)? })).collect::<Result<Vec<_>>>()?;
+            Ok(ShelfSnapshot { books, groups })
         }).await
     }
     /// Only call this for a complete shelf snapshot, never for an incremental response.
@@ -30,6 +36,24 @@ impl Store {
         books: Vec<Book>,
         sync_key: Option<String>,
     ) -> Result<()> {
+        self.apply_shelf_snapshot_with_groups(
+            identity,
+            ShelfSnapshot {
+                books,
+                groups: Vec::new(),
+            },
+            sync_key,
+        )
+        .await
+    }
+    /// Atomically replace a complete shelf and its groups for this account.
+    pub async fn apply_shelf_snapshot_with_groups(
+        &self,
+        identity: &Identity,
+        snapshot: ShelfSnapshot,
+        sync_key: Option<String>,
+    ) -> Result<()> {
+        let ShelfSnapshot { books, groups } = snapshot;
         let identity = identity.clone();
         self.call(move |db| {
             let tx = db.connection.transaction()?;
@@ -44,6 +68,10 @@ impl Store {
                 tx.execute("INSERT INTO shelf_entries(account_id,book_id,sort_order,finished,updated_at_ms) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(account_id,book_id) DO UPDATE SET sort_order=excluded.sort_order,finished=excluded.finished,updated_at_ms=excluded.updated_at_ms", params![identity.account_id,b.id,order as i64,b.finished,time])?;
             }
             tx.execute("DELETE FROM shelf_entries WHERE account_id=?1 AND sort_order=-1", [&identity.account_id])?;
+            tx.execute("DELETE FROM shelf_groups WHERE account_id=?1", [&identity.account_id])?;
+            for (order, group) in groups.iter().enumerate() {
+                tx.execute("INSERT INTO shelf_groups(account_id,group_id,name,sort_order,book_ids_json) VALUES(?1,?2,?3,?4,?5)", params![identity.account_id,group.id,group.name,order as i64,serde_json::to_string(&group.book_ids)?])?;
+            }
             cursor(&tx,&identity,SyncScope::Shelf,"",sync_key.as_deref())?;
             tx.commit()?;
             Ok(())

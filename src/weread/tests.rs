@@ -1,4 +1,33 @@
 use super::*;
+
+#[test]
+fn shelf_groups_preserve_identity_membership_order_and_empty_groups() {
+    let shelf = parse_shelf_snapshot(&json!({
+        "books": [{"bookId":"1","title":"Book"}],
+        "archive": [
+            {"archiveId":42,"name":"文学","bookIds":["1",2,"missing"]},
+            {"archiveId":"43","name":"文学","bookIds":[]}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(shelf.groups[0].id, "42");
+    assert_eq!(shelf.groups[0].book_ids, ["1", "2", "missing"]);
+    assert_eq!(shelf.groups[1].id, "43");
+    assert!(shelf.groups[1].book_ids.is_empty());
+    assert!(parse_shelf_snapshot(&json!({"books":[]}))
+        .unwrap()
+        .groups
+        .is_empty());
+    for archive in [
+        json!(null),
+        json!({}),
+        json!([{"name":"missing ID","bookIds":[]}]),
+        json!([{"archiveId":1,"name":"invalid IDs","bookIds":[null]}]),
+        json!([{"archiveId":1,"name":"A","bookIds":[]}, {"archiveId":"1","name":"B","bookIds":[]}]),
+    ] {
+        assert!(parse_shelf_snapshot(&json!({"books":[],"archive":archive})).is_err());
+    }
+}
 use std::{
     io::{Read, Write},
     net::TcpListener,

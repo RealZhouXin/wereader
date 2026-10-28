@@ -1,9 +1,9 @@
 use crate::{
-    weread::{self, Api, Book, Cover, Credentials, Error, Poll, Store},
-    AppWindow, ShelfRow,
+    weread::{self, Api, Cover, Credentials, Error, Poll, ShelfGroup, ShelfSnapshot, Store},
+    AppWindow, ShelfPreview, ShelfRow,
 };
 use futures_util::{stream, StreamExt};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -29,7 +29,7 @@ enum Event {
     Status(String),
     Qr(String),
     SignedIn(String),
-    Shelf(Vec<Book>),
+    Shelf(ShelfSnapshot),
     AccountMetrics {
         reading_time: String,
         weekly_reading_time: String,
@@ -81,6 +81,7 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
         .map_err(|_| Error::new("Cannot start network worker."))?;
     let generation = Rc::new(Cell::new(0u64));
     let all_books: Rc<RefCell<Vec<ShelfRow>>> = Rc::new(RefCell::new(Vec::new()));
+    let all_groups = Rc::new(RefCell::new(Vec::<ShelfGroup>::new()));
     for (action, install) in [
         (Action::Login, 0),
         (Action::Refresh, 1),
@@ -90,6 +91,7 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
         let commands = commands.clone();
         let generation = generation.clone();
         let all_books = all_books.clone();
+        let all_groups = all_groups.clone();
         let callback = move || {
             if let Some(ui) = weak.upgrade() {
                 let id = generation.get().wrapping_add(1);
@@ -100,6 +102,8 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                 if matches!(action, Action::Login | Action::Logout) {
                     ui.set_logged_in(false);
                     all_books.borrow_mut().clear();
+                    all_groups.borrow_mut().clear();
+                    reset_groups(&ui);
                     ui.set_query("".into());
                     ui.set_total_books(0);
                     ui.set_account("".into());
@@ -134,13 +138,7 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
             _ => ui.on_logout(callback),
         }
     }
-    let weak = ui.as_weak();
-    let searchable = all_books.clone();
-    ui.on_search(move || {
-        if let Some(ui) = weak.upgrade() {
-            show_filtered(&ui, &searchable.borrow(), true);
-        }
-    });
+    bind_shelf_filters(ui, &all_books, &all_groups);
     let weak = ui.as_weak();
     let timer = slint::Timer::default();
     // A Slint timer works with both winit and the Kindle backend event loop.
@@ -180,7 +178,8 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                         ui.set_reading_time(reading_time.into());
                         ui.set_weekly_reading_time(weekly_reading_time.into());
                     }
-                    Event::Shelf(books) => {
+                    Event::Shelf(ShelfSnapshot { books, groups }) => {
+                        *all_groups.borrow_mut() = groups;
                         let count = books.len();
                         *all_books.borrow_mut() = books
                             .into_iter()
@@ -191,10 +190,11 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                                 cover: slint::Image::default(),
                                 cover_state: if b.cover.is_empty() { 2 } else { 0 },
                                 finished: b.finished,
+                                ..Default::default()
                             })
                             .collect();
                         ui.set_total_books(count as i32);
-                        show_filtered(&ui, &all_books.borrow(), true);
+                        show_filtered(&ui, &all_books.borrow(), &all_groups.borrow(), true);
                         ui.set_busy(false);
                         ui.set_status(if count == 0 {
                             "书架还是空的".into()
@@ -217,19 +217,14 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                             } else {
                                 row.cover_state = 2;
                             }
-                            let model = ui.get_books();
-                            for index in 0..model.row_count() {
-                                if model
-                                    .row_data(index)
-                                    .is_some_and(|r| r.book_id == row.book_id)
-                                {
-                                    model.set_row_data(index, row.clone());
-                                }
-                            }
+                            // Folder thumbnails share the same asynchronously loaded covers.
+                            show_filtered(&ui, &all, &all_groups.borrow(), false);
                         }
                     }
                     Event::SignedOut => {
                         all_books.borrow_mut().clear();
+                        all_groups.borrow_mut().clear();
+                        reset_groups(&ui);
                         ui.set_total_books(0);
                         ui.set_logged_in(false);
                         ui.set_busy(false);
@@ -371,10 +366,10 @@ async fn execute(
         ));
     }
     emit(Event::SignedIn(old.vid.clone()));
-    let cached = store.load_shelf(&identity).await?;
-    if !cached.is_empty() {
+    let cached = store.load_shelf_snapshot(&identity).await?;
+    if !cached.books.is_empty() || !cached.groups.is_empty() {
         emit(Event::Shelf(cached.clone()));
-        for book in &cached {
+        for book in &cached.books {
             if let Some(image) = weread::cached_cover(store, &identity, book).await {
                 emit(Event::Cover {
                     id: book.id.clone(),
@@ -384,21 +379,22 @@ async fn execute(
         }
     }
     emit(Event::Status("正在加载书架…".into()));
-    let books = match api.shelf(old).await {
+    let snapshot = match api.shelf_snapshot(old).await {
         Ok(books) => books,
         Err(error) if error.auth => {
             let new = api.refresh(old).await?;
             // Persist rotating refresh tokens before the shelf retry.
             store.rotate_session(&identity, &new).await?;
             *credentials = Some(new);
-            api.shelf(credentials.as_ref().unwrap()).await?
+            api.shelf_snapshot(credentials.as_ref().unwrap()).await?
         }
         Err(error) => return Err(error),
     };
     store
-        .apply_shelf_snapshot(&identity, books.clone(), None)
+        .apply_shelf_snapshot_with_groups(&identity, snapshot.clone(), None)
         .await?;
-    emit(Event::Shelf(books.clone()));
+    let books = snapshot.books.clone();
+    emit(Event::Shelf(snapshot));
     // Account failures are independent of the shelf and of each other.
     let current = credentials.as_ref().unwrap();
     let (mut reading, mut weekly) =
@@ -469,14 +465,138 @@ fn filtered_rows(all: &[ShelfRow], query: &str) -> Vec<ShelfRow> {
         .cloned()
         .collect()
 }
-fn show_filtered(ui: &AppWindow, all: &[ShelfRow], reset: bool) {
-    ui.set_books(ModelRc::new(VecModel::from(filtered_rows(
-        all,
-        ui.get_query().as_str(),
-    ))));
-    if reset {
-        ui.set_page(1);
+fn bind_shelf_filters(
+    ui: &AppWindow,
+    all_books: &Rc<RefCell<Vec<ShelfRow>>>,
+    all_groups: &Rc<RefCell<Vec<ShelfGroup>>>,
+) {
+    let weak = ui.as_weak();
+    let searchable = all_books.clone();
+    let searchable_groups = all_groups.clone();
+    ui.on_search(move || {
+        if let Some(ui) = weak.upgrade() {
+            show_filtered(&ui, &searchable.borrow(), &searchable_groups.borrow(), true);
+        }
+    });
+    let weak = ui.as_weak();
+    let grouped_books = all_books.clone();
+    let selectable_groups = all_groups.clone();
+    let shelf_page = Cell::new(1);
+    ui.on_select_group(move |key| {
+        if let Some(ui) = weak.upgrade() {
+            let returning = key == "all" && ui.get_selected_group() != "all";
+            if key != "all" && ui.get_selected_group() == "all" {
+                shelf_page.set(ui.get_page());
+            }
+            ui.set_selected_group(key);
+            ui.set_query("".into());
+            show_filtered(
+                &ui,
+                &grouped_books.borrow(),
+                &selectable_groups.borrow(),
+                true,
+            );
+            if returning {
+                ui.set_page(shelf_page.get().clamp(1, ui.get_page_count()));
+            }
+        }
+    });
+}
+
+fn reset_groups(ui: &AppWindow) {
+    ui.set_selected_group("all".into());
+    ui.set_group_name("书架".into());
+}
+
+fn shelf_rows(all: &[ShelfRow], groups: &[ShelfGroup]) -> Vec<ShelfRow> {
+    let mut rows = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    // Replace each group's first book with its folder, keeping ungrouped books
+    // in shelf order. Empty groups follow the books in server group order.
+    for book in all {
+        let mut grouped = false;
+        for group in groups {
+            if group.book_ids.iter().any(|id| id == book.book_id.as_str()) {
+                grouped = true;
+                if emitted.insert(group.id.as_str()) {
+                    rows.push(folder_row(all, groups, group));
+                }
+            }
+        }
+        if !grouped {
+            rows.push(book.clone());
+        }
     }
+    for group in groups {
+        if emitted.insert(group.id.as_str()) {
+            rows.push(folder_row(all, groups, group));
+        }
+    }
+    rows
+}
+
+fn folder_row(all: &[ShelfRow], groups: &[ShelfGroup], group: &ShelfGroup) -> ShelfRow {
+    let key = format!("archive:{}", group.id);
+    let books = group_books(all, groups, &key);
+    let previews = books
+        .iter()
+        .take(4)
+        .map(|book| ShelfPreview {
+            cover: book.cover.clone(),
+            cover_state: book.cover_state,
+            title: book.title.clone(),
+        })
+        .collect::<Vec<_>>();
+    ShelfRow {
+        title: group.name.clone().into(),
+        group_key: key.into(),
+        group_count: books.len() as i32,
+        group_covers: ModelRc::new(VecModel::from(previews)),
+        ..Default::default()
+    }
+}
+
+fn group_books(all: &[ShelfRow], groups: &[ShelfGroup], key: &str) -> Vec<ShelfRow> {
+    let ids: std::collections::HashSet<&str> = groups
+        .iter()
+        .find(|g| key == format!("archive:{}", g.id))
+        .into_iter()
+        .flat_map(|g| g.book_ids.iter().map(String::as_str))
+        .collect();
+    all.iter()
+        .filter(|book| key == "all" || ids.contains(book.book_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn show_filtered(ui: &AppWindow, all: &[ShelfRow], groups: &[ShelfGroup], reset: bool) {
+    let selected = ui.get_selected_group();
+    let group = groups
+        .iter()
+        .find(|g| selected == format!("archive:{}", g.id));
+    if selected != "all" && group.is_none() {
+        ui.set_selected_group("all".into());
+    }
+    ui.set_group_name(group.map_or("书架", |g| g.name.as_str()).into());
+    let query = ui.get_query();
+    let rows = if ui.get_selected_group() == "all" {
+        if query.trim().is_empty() {
+            shelf_rows(all, groups)
+        } else {
+            filtered_rows(all, query.as_str())
+        }
+    } else {
+        filtered_rows(
+            &group_books(all, groups, ui.get_selected_group().as_str()),
+            query.as_str(),
+        )
+    };
+    ui.set_books(ModelRc::new(VecModel::from(rows)));
+    ui.set_page(if reset {
+        1
+    } else {
+        ui.get_page().clamp(1, ui.get_page_count())
+    });
 }
 
 pub fn qr_image(url: &str) -> weread::Result<slint::Image> {
@@ -504,8 +624,226 @@ pub fn qr_image(url: &str) -> weread::Result<slint::Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::weread::tests::{credentials, temporary, Mock};
+    use crate::weread::{
+        tests::{credentials, temporary, Mock},
+        Book,
+    };
     use serde_json::json;
+    use slint::Model;
+
+    #[test]
+    fn group_controls_reset_pagination_search_and_recover_from_removed_groups() {
+        use slint::platform::{
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+            Platform, PlatformError, WindowAdapter,
+        };
+        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        impl Platform for TestPlatform {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+                Ok(self.0.clone())
+            }
+        }
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
+        window.set_size(slint::PhysicalSize::new(600, 800));
+        let ui = AppWindow::new().unwrap();
+        let books = Rc::new(RefCell::new(
+            (0..25)
+                .map(|i| {
+                    let (width, height) = match i % 3 {
+                        0 => (120, 170),
+                        1 => (100, 250),
+                        _ => (250, 100),
+                    };
+                    let mut cover =
+                        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width, height);
+                    let shade = 40 + i as u8 * 7;
+                    cover.make_mut_slice().fill(slint::Rgb8Pixel::new(
+                        shade,
+                        shade + 5,
+                        shade + 10,
+                    ));
+                    ShelfRow {
+                        book_id: i.to_string().into(),
+                        title: format!("书籍{i}").into(),
+                        cover: slint::Image::from_rgb8(cover),
+                        cover_state: 1,
+                        ..Default::default()
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let groups = Rc::new(RefCell::new(vec![
+            ShelfGroup {
+                id: "1".into(),
+                name: "人民文学出版社".into(),
+                book_ids: (5..18).map(|i| i.to_string()).collect(),
+            },
+            ShelfGroup {
+                id: "2".into(),
+                name: "空组".into(),
+                book_ids: vec![],
+            },
+        ]));
+        bind_shelf_filters(&ui, &books, &groups);
+        show_filtered(&ui, &books.borrow(), &groups.borrow(), true);
+        assert_eq!(ui.get_page_count(), 2);
+        ui.set_logged_in(true);
+        ui.set_total_books(25);
+        ui.set_status("共 25 本书".into());
+        window
+            .renderer()
+            .register_font_from_memory(crate::DEFAULT_FONT)
+            .unwrap();
+        ui.show().unwrap();
+        let click = |x, y| {
+            let position = slint::LogicalPosition::new(x, y);
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+        };
+        for (width, height) in [(600, 800), (820, 1060)] {
+            window.set_size(slint::PhysicalSize::new(width, height));
+            window.request_redraw();
+            let mut pixels = vec![slint::Rgb8Pixel::default(); (width * height) as usize];
+            slint::platform::update_timers_and_animations();
+            assert!(window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
+            }));
+            let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+            image::save_buffer(
+                format!("/tmp/rereader-groups-{width}.png"),
+                &rgb,
+                width,
+                height,
+                image::ColorType::Rgb8,
+            )
+            .unwrap();
+            let mut bounds = Vec::new();
+            for id in 5..9 {
+                let shade = 40 + id as u8 * 7;
+                let points: Vec<_> = pixels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| (p.r, p.g, p.b) == (shade, shade + 5, shade + 10))
+                    .map(|(i, _)| (i as u32 % width, i as u32 / width))
+                    .collect();
+                assert!(!points.is_empty(), "folder must show preview {id}");
+                let left = points.iter().map(|p| p.0).min().unwrap();
+                let right = points.iter().map(|p| p.0).max().unwrap();
+                let top = points.iter().map(|p| p.1).min().unwrap();
+                let bottom = points.iter().map(|p| p.1).max().unwrap();
+                assert!(
+                    right - left < width / 8 && bottom - top < height / 6,
+                    "preview must stay within a quarter of the cover"
+                );
+                bounds.push((left, top, right, bottom));
+            }
+            assert!(bounds[0].2 < bounds[1].0 && bounds[2].2 < bounds[3].0);
+            assert!(bounds[0].3 < bounds[2].1 && bounds[1].3 < bounds[3].1);
+            // The folder is the second item in the second row, like the reference.
+            click(width as f32 * 0.36, height as f32 * 0.48);
+            assert_eq!(ui.get_selected_group(), "archive:1");
+            window.request_redraw();
+            assert!(window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
+            }));
+            let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+            image::save_buffer(
+                format!("/tmp/rereader-group-open-{width}.png"),
+                &rgb,
+                width,
+                height,
+                image::ColorType::Rgb8,
+            )
+            .unwrap();
+            click(width as f32 * 0.07, height as f32 * 0.12);
+            assert_eq!(ui.get_selected_group(), "all");
+        }
+        ui.set_page(2);
+        ui.invoke_select_group("archive:1".into());
+        assert_eq!(ui.get_group_name(), "人民文学出版社");
+        assert_eq!(ui.get_page(), 1);
+        assert_eq!(ui.get_page_count(), 2);
+        assert_eq!(ui.get_books().row_count(), 13);
+        ui.set_query("书籍12".into());
+        ui.invoke_search();
+        assert_eq!(ui.get_books().row_count(), 1);
+        ui.invoke_select_group("all".into());
+        assert_eq!(ui.get_page(), 2);
+        assert!(ui.get_query().is_empty());
+        assert_eq!(ui.get_books().row_count(), 14);
+        ui.invoke_select_group("archive:2".into());
+        assert_eq!(ui.get_books().row_count(), 0);
+        assert_eq!(ui.get_page_count(), 1);
+        groups.borrow_mut().clear();
+        show_filtered(&ui, &books.borrow(), &groups.borrow(), true);
+        assert_eq!(ui.get_selected_group(), "all");
+        assert_eq!(ui.get_books().row_count(), 25);
+        reset_groups(&ui);
+        assert_eq!(ui.get_group_name(), "书架");
+        ui.hide().unwrap();
+    }
+
+    #[test]
+    fn groups_filter_by_id_without_duplicates_and_search_within_the_group() {
+        let rows = vec![
+            ShelfRow {
+                book_id: "a".into(),
+                title: "文学一".into(),
+                ..Default::default()
+            },
+            ShelfRow {
+                book_id: "b".into(),
+                title: "文学二".into(),
+                ..Default::default()
+            },
+            ShelfRow {
+                book_id: "c".into(),
+                title: "科学".into(),
+                ..Default::default()
+            },
+        ];
+        let groups = vec![
+            ShelfGroup {
+                id: "1".into(),
+                name: "同名组".into(),
+                book_ids: vec!["b".into(), "a".into(), "a".into(), "missing".into()],
+            },
+            ShelfGroup {
+                id: "2".into(),
+                name: "同名组".into(),
+                book_ids: vec![],
+            },
+        ];
+        let grouped = group_books(&rows, &groups, "archive:1");
+        assert_eq!(
+            grouped
+                .iter()
+                .map(|b| b.book_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(filtered_rows(&grouped, "二").len(), 1);
+        assert!(filtered_rows(&grouped, "科学").is_empty());
+        assert!(group_books(&rows, &groups, "archive:2").is_empty());
+        assert_eq!(group_books(&rows, &[], "all").len(), 3);
+        let shelf = shelf_rows(&rows, &groups);
+        assert_eq!(shelf.len(), 3);
+        assert_eq!(shelf[0].group_key, "archive:1");
+        assert_eq!(shelf[0].group_count, 2);
+        assert_eq!(shelf[0].group_covers.row_count(), 2);
+        assert_eq!(shelf[1].book_id, "c");
+        assert_eq!(shelf[2].group_key, "archive:2");
+        assert_eq!(shelf[2].group_count, 0);
+    }
 
     #[test]
     fn shelf_search_matches_chinese_titles_and_authors() {
@@ -536,7 +874,10 @@ mod tests {
                 200,
                 json!({"vid":"42","accessToken":"rotated","refreshToken":"rotated-refresh"}),
             ),
-            (200, json!({"books":[{"bookId":"b","title":"Book"}]})),
+            (
+                200,
+                json!({"books":[{"bookId":"b","title":"Book"}], "archive":[{"archiveId":7,"name":"文学","bookIds":["b"]}]}),
+            ),
             (200, json!({"totalReadingTime":3661,"totalReadTime":1800})),
             (200, json!({"totalReadingTime":3661,"totalReadTime":1800})),
         ]);
@@ -557,7 +898,10 @@ mod tests {
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
             .iter()
-            .any(|e| matches!(e,Event::Shelf(books) if books.len()==1)));
+            .any(|e| matches!(e,Event::Shelf(shelf) if shelf.books.len()==1 && shelf.groups.len()==1 && shelf.groups[0].id=="7")));
+        let identity = store.identity().await.unwrap().unwrap();
+        let snapshot = store.load_shelf_snapshot(&identity).await.unwrap();
+        assert_eq!(snapshot.groups[0].book_ids, ["b"]);
         assert!(events.iter().any(
             |e| matches!(e, Event::AccountMetrics { reading_time, weekly_reading_time }
             if reading_time == "1 小时 1 分钟" && weekly_reading_time == "0 小时 30 分钟")
@@ -597,7 +941,7 @@ mod tests {
         assert!(events
             .borrow()
             .iter()
-            .any(|e| matches!(e, Event::Shelf(books) if books.is_empty())));
+            .any(|e| matches!(e, Event::Shelf(shelf) if shelf.books.is_empty())));
         assert!(events.borrow().iter().any(
             |e| matches!(e, Event::AccountMetrics { reading_time, weekly_reading_time }
             if reading_time == "0 小时 0 分钟" && weekly_reading_time == "暂不可用")
@@ -708,8 +1052,16 @@ mod tests {
             cover: String::new(),
             finished: false,
         };
+        let snapshot = ShelfSnapshot {
+            books: vec![book.clone()],
+            groups: vec![ShelfGroup {
+                id: "offline-group".into(),
+                name: "离线分组".into(),
+                book_ids: vec![book.id.clone()],
+            }],
+        };
         store
-            .apply_shelf_snapshot(&identity, vec![book.clone()], None)
+            .apply_shelf_snapshot_with_groups(&identity, snapshot.clone(), None)
             .await
             .unwrap();
         let events = RefCell::new(Vec::new());
@@ -722,7 +1074,7 @@ mod tests {
         assert!(events
             .borrow()
             .iter()
-            .any(|e| matches!(e,Event::Shelf(books) if books==&vec![book.clone()])));
+            .any(|e| matches!(e,Event::Shelf(shelf) if shelf==&snapshot)));
         assert_eq!(store.load_shelf(&identity).await.unwrap(), vec![book]);
         drop(store);
         std::fs::remove_dir_all(path).unwrap();

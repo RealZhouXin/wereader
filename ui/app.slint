@@ -1,14 +1,16 @@
 import "../assets/NotoSansSC-Regular.otf";
 
+export struct ShelfPreview { cover: image, cover-state: int, title: string }
 export struct ShelfRow {
     book-id: string, title: string, author: string,
     cover: image, cover-state: int, finished: bool,
+    group-key: string, group-covers: [ShelfPreview], group-count: int,
 }
 
-// Shared paper and ink tones from Figma frame 3:2.
+// Pure white paper surfaces for e-ink displays.
 global Paper {
-    out property <color> background: #f4f1e9;
-    out property <color> surface: #f7f6f0;
+    out property <color> background: #fff;
+    out property <color> surface: #fff;
     out property <color> ink: #2e2e2e;
     out property <color> muted: #7a7a7a;
     out property <color> line: #c7c7c7;
@@ -28,6 +30,7 @@ component InkIcon inherits Path {
         : root.name == "compass" ? "M22 12 A10 10 0 1 1 2 12 A10 10 0 1 1 22 12 M16 8 L14 14 L8 16 L10 10 Z"
         : root.name == "up" ? "M6 15 L12 9 L18 15"
         : root.name == "down" ? "M6 9 L12 15 L18 9"
+        : root.name == "back" ? "M15 5 L8 12 L15 19"
         : root.name == "close" ? "M6 6 L18 18 M18 6 L6 18"
         : "M20 7 A9 9 0 1 0 21 15 M20 2 L20 7 L15 7";
 }
@@ -47,6 +50,7 @@ component InkButton inherits Rectangle {
     background: touch.pressed && root.enabled ? #dedbd3 : root.primary ? Paper.ink : Paper.surface;
     Text {
         text: root.label;
+        overflow: elide;
         color: !root.enabled ? #aaa : root.primary ? Paper.background : Paper.ink;
         font-size: 18px * root.scale;
         horizontal-alignment: center;
@@ -86,6 +90,8 @@ export component AppWindow inherits Window {
     in-out property <int> page: 1;
     in property <[ShelfRow]> books;
     in property <int> total-books;
+    in-out property <string> selected-group: "all";
+    in property <string> group-name: "书架";
     in-out property <string> query;
     in property <bool> logged-in: false;
     in property <bool> busy: false;
@@ -99,6 +105,7 @@ export component AppWindow inherits Window {
     out property <int> page-count: max(1, ceil(root.books.length / 12));
     callback login(); callback refresh(); callback logout(); callback search();
     callback next-page(); callback previous-page(); callback exit();
+    callback select-group(string);
 
     Rectangle {
         x: 0px; y: 0px; width: 100%; height: 100%;
@@ -144,7 +151,16 @@ export component AppWindow inherits Window {
                 Rectangle { height: 19px * root.scale; }
                 HorizontalLayout {
                     height: 46px * root.scale; spacing: 12px * root.scale;
-                    Text { text: root.account-open ? "我的" : "书架"; font-size: 29px * root.scale; font-weight: 500; color: Paper.ink; vertical-alignment: center; }
+                    if root.logged-in && !root.account-open && root.selected-group != "all": IconButton {
+                        icon: "back"; label: "返回书架"; scale: root.scale;
+                        width: 36px * root.scale;
+                        activated => { root.select-group("all"); }
+                    }
+                    Text {
+                        text: root.account-open ? "我的" : root.selected-group == "all" ? "书架" : root.group-name;
+                        font-size: 29px * root.scale; font-weight: 500; color: Paper.ink;
+                        overflow: elide; vertical-alignment: center;
+                    }
                     if root.logged-in: Rectangle {
                         width: 92px * root.scale;
                         InkIcon { name: "refresh"; x: 0px; width: 24px * root.scale; height: self.width; y: (parent.height - self.height) / 2; ink: root.busy ? #aaa : Paper.muted; }
@@ -173,13 +189,47 @@ export component AppWindow inherits Window {
                                 x: 0px; y: 0px;
                                 width: min(150px * root.scale, parent.width);
                                 height: min(self.width * 213 / 150, parent.height - 50px * root.scale);
-                                background: #e6e2d9;
+                                background: Paper.surface;
                                 clip: true;
-                                if book.cover-state == 1: Image {
+                                if book.group-key != "": Rectangle {
+                                    width: parent.width; height: parent.height;
+                                    border-width: 1px; border-color: Paper.line;
+                                    for preview[preview-index] in book.group-covers: Rectangle {
+                                        private property <length> gap: 4px * root.scale;
+                                        width: (parent.width - 3 * self.gap) / 2;
+                                        height: (parent.height - 3 * self.gap) / 2;
+                                        x: self.gap + mod(preview-index, 2) * (self.width + self.gap);
+                                        y: self.gap + floor(preview-index / 2) * (self.height + self.gap);
+                                        clip: true;
+                                        if preview.cover-state == 1: Image {
+                                            width: parent.width; height: parent.height;
+                                            source: preview.cover; image-fit: contain;
+                                        }
+                                        if preview.cover-state != 1: Rectangle {
+                                            width: parent.width; height: parent.height;
+                                            border-width: 1px; border-color: Paper.line;
+                                            Text {
+                                                x: 3px * root.scale; y: 3px * root.scale;
+                                                width: parent.width - 6px * root.scale;
+                                                height: parent.height - 6px * root.scale;
+                                                text: preview.title; wrap: word-wrap; overflow: elide;
+                                                color: Paper.ink; font-size: 12px * root.scale;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                    if book.group-covers.length == 0: InkIcon {
+                                        name: "book"; width: 40px * root.scale; height: self.width;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        ink: Paper.muted;
+                                    }
+                                }
+                                if book.group-key == "" && book.cover-state == 1: Image {
                                     width: parent.width; height: parent.height;
                                     source: book.cover; image-fit: contain;
                                 }
-                                if book.cover-state != 1: Rectangle {
+                                if book.group-key == "" && book.cover-state != 1: Rectangle {
                                     x: 8px * root.scale; y: 8px * root.scale;
                                     width: parent.width - 16px * root.scale; height: parent.height - 16px * root.scale;
                                     border-width: 1px; border-color: #c2beb5;
@@ -190,10 +240,10 @@ export component AppWindow inherits Window {
                                         Text { text: book.cover-state == 0 ? "加载封面…" : "暂无封面"; font-size: 11px * root.scale; color: Paper.muted; height: 20px * root.scale; }
                                     }
                                 }
-                                if book.finished: Rectangle {
+                                if book.group-key == "" && book.finished: Rectangle {
                                     x: parent.width - self.width - 4px * root.scale; y: 4px * root.scale;
                                     width: 46px * root.scale; height: 24px * root.scale;
-                                    background: #f0ede3; border-radius: 1px;
+                                    background: Paper.surface; border-radius: 1px;
                                     Text { text: "读完"; font-size: 12px * root.scale; color: #3b3b3b; horizontal-alignment: center; vertical-alignment: center; }
                                 }
                             }
@@ -202,6 +252,11 @@ export component AppWindow inherits Window {
                                 width: parent.width;
                                 text: book.title; color: #303030; font-size: 18px * root.scale;
                                 overflow: elide; vertical-alignment: center;
+                            }
+                            if book.group-key != "": TouchArea {
+                                accessible-role: button;
+                                accessible-label: book.title + "，分组，" + book.group-count + " 本";
+                                clicked => { root.select-group(book.group-key); }
                             }
                         }
                         if root.books.length == 0: VerticalLayout {
@@ -212,7 +267,7 @@ export component AppWindow inherits Window {
                                 Rectangle { }
                             }
                             Text {
-                                text: root.query != "" ? "没有找到匹配的书籍" : root.busy ? "正在加载书架…" : "书架还是空的";
+                                text: root.query != "" ? "没有找到匹配的书籍" : root.busy ? "正在加载书架…" : root.selected-group == "all" ? "书架还是空的" : "这个分组暂无书籍";
                                 color: Paper.muted; font-size: 20px * root.scale; horizontal-alignment: center;
                             }
                             Text { text: root.query != "" ? "试试其他书名或作者" : "刷新以同步微信读书书架"; color: Paper.muted; font-size: 16px * root.scale; horizontal-alignment: center; }
@@ -282,7 +337,7 @@ export component AppWindow inherits Window {
                 padding-left: 28px * root.scale; padding-right: 29px * root.scale;
                 spacing: 54px * root.scale;
                 IconButton { icon: "compass"; label: "同步书架"; icon-size: 38px; scale: root.scale; width: 64px * root.scale; enabled: root.logged-in && !root.busy; activated => { root.refresh(); } }
-                IconButton { icon: "book"; label: "书架"; icon-size: 38px; scale: root.scale; width: 64px * root.scale; activated => { root.account-open = false; root.query = ""; root.search(); } }
+                IconButton { icon: "book"; label: "书架"; icon-size: 38px; scale: root.scale; width: 64px * root.scale; activated => { root.account-open = false; root.query = ""; root.select-group("all"); } }
                 IconButton { icon: "user"; label: "我的账号"; icon-size: 38px; scale: root.scale; width: 64px * root.scale; activated => { root.account-open = !root.account-open; } }
                 Rectangle { horizontal-stretch: 1; }
                 if root.logged-in && !root.account-open: Text {
