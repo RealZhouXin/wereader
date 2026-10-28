@@ -6,6 +6,7 @@ use futures_util::{stream, StreamExt};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::mpsc,
     thread,
@@ -24,6 +25,7 @@ enum Action {
 struct Command {
     generation: u64,
     action: Action,
+    loaded_covers: HashSet<(String, String)>,
 }
 enum Event {
     Status(String),
@@ -57,6 +59,7 @@ impl Drop for Controller {
         let _ = self.commands.send(Command {
             generation: u64::MAX,
             action: Action::Shutdown,
+            loaded_covers: HashSet::new(),
         });
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -124,6 +127,12 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                     .send(Command {
                         generation: id,
                         action,
+                        loaded_covers: all_books
+                            .borrow()
+                            .iter()
+                            .filter(|book| book.cover_state == 1)
+                            .map(|book| (book.book_id.to_string(), book.cover_url.to_string()))
+                            .collect(),
                     })
                     .is_err()
                 {
@@ -181,18 +190,8 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
                     Event::Shelf(ShelfSnapshot { books, groups }) => {
                         *all_groups.borrow_mut() = groups;
                         let count = books.len();
-                        *all_books.borrow_mut() = books
-                            .into_iter()
-                            .map(|b| ShelfRow {
-                                book_id: b.id.into(),
-                                title: b.title.into(),
-                                author: b.author.into(),
-                                cover: slint::Image::default(),
-                                cover_state: if b.cover.is_empty() { 2 } else { 0 },
-                                finished: b.finished,
-                                ..Default::default()
-                            })
-                            .collect();
+                        let rows = merge_shelf_books(books, &all_books.borrow());
+                        *all_books.borrow_mut() = rows;
                         ui.set_total_books(count as i32);
                         show_filtered(&ui, &all_books.borrow(), &all_groups.borrow(), true);
                         ui.set_busy(false);
@@ -254,6 +253,7 @@ pub fn start(ui: &AppWindow) -> weread::Result<Controller> {
     let _ = commands.send(Command {
         generation: 0,
         action: Action::Restore,
+        loaded_covers: HashSet::new(),
     });
     Ok(Controller {
         timer,
@@ -285,7 +285,7 @@ async fn run(
         next = tokio::select! {
             biased;
             command = commands.recv() => command,
-            result = execute(&api, &store, &mut credentials, command.action, &emit) => {
+            result = execute(&api, &store, &mut credentials, command.action, &command.loaded_covers, &emit) => {
                 if let Err(error) = result { emit(Event::Failed(error.message)); }
                 commands.recv().await
             }
@@ -298,6 +298,7 @@ async fn execute(
     store: &Store,
     credentials: &mut Option<Credentials>,
     action: Action,
+    loaded_covers: &HashSet<(String, String)>,
     emit: &impl Fn(Event),
 ) -> weread::Result<()> {
     match action {
@@ -366,11 +367,14 @@ async fn execute(
         ));
     }
     emit(Event::SignedIn(old.vid.clone()));
+    let mut loaded_covers = loaded_covers.clone();
     let cached = store.load_shelf_snapshot(&identity).await?;
-    if !cached.books.is_empty() || !cached.groups.is_empty() {
+    if !matches!(action, Action::Refresh) && (!cached.books.is_empty() || !cached.groups.is_empty())
+    {
         emit(Event::Shelf(cached.clone()));
         for book in &cached.books {
             if let Some(image) = weread::cached_cover(store, &identity, book).await {
+                loaded_covers.insert((book.id.clone(), book.cover.clone()));
                 emit(Event::Cover {
                     id: book.id.clone(),
                     image: Some(image),
@@ -431,15 +435,17 @@ async fn execute(
             .map(format_reading_time)
             .unwrap_or_else(|_| "暂不可用".into()),
     });
-    let mut covers = stream::iter(books.into_iter().filter(|b| !b.cover.is_empty()))
-        .map(|book| {
-            let identity = &identity;
-            async move {
-                let image = api.cover(store, identity, &book).await.ok();
-                (book.id, image)
-            }
-        })
-        .buffer_unordered(4);
+    let mut covers = stream::iter(books.into_iter().filter(|b| {
+        !b.cover.is_empty() && !loaded_covers.contains(&(b.id.clone(), b.cover.clone()))
+    }))
+    .map(|book| {
+        let identity = &identity;
+        async move {
+            let image = api.cover(store, identity, &book).await.ok();
+            (book.id, image)
+        }
+    })
+    .buffer_unordered(4);
     while let Some((id, image)) = covers.next().await {
         emit(Event::Cover { id, image });
     }
@@ -452,6 +458,38 @@ fn format_reading_time(seconds: u64) -> String {
     } else {
         format!("{} 小时 {} 分钟", seconds / 3600, seconds % 3600 / 60)
     }
+}
+
+// Shelf metadata updates must not discard decoded images whose URLs are unchanged.
+fn merge_shelf_books(books: Vec<weread::Book>, previous: &[ShelfRow]) -> Vec<ShelfRow> {
+    let previous: HashMap<_, _> = previous
+        .iter()
+        .map(|row| (row.book_id.as_str(), row))
+        .collect();
+    books
+        .into_iter()
+        .map(|book| {
+            let existing = previous
+                .get(book.id.as_str())
+                .filter(|row| row.cover_url == book.cover && row.cover_state == 1);
+            ShelfRow {
+                cover: existing.map(|row| row.cover.clone()).unwrap_or_default(),
+                cover_state: if book.cover.is_empty() {
+                    2
+                } else if existing.is_some() {
+                    1
+                } else {
+                    0
+                },
+                cover_url: book.cover.into(),
+                book_id: book.id.into(),
+                title: book.title.into(),
+                author: book.author.into(),
+                finished: book.finished,
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 fn filtered_rows(all: &[ShelfRow], query: &str) -> Vec<ShelfRow> {
@@ -484,6 +522,9 @@ fn bind_shelf_filters(
     let shelf_page = Cell::new(1);
     ui.on_select_group(move |key| {
         if let Some(ui) = weak.upgrade() {
+            if key == ui.get_selected_group() && ui.get_query().is_empty() {
+                return;
+            }
             let returning = key == "all" && ui.get_selected_group() != "all";
             if key != "all" && ui.get_selected_group() == "all" {
                 shelf_page.set(ui.get_page());
@@ -717,6 +758,7 @@ mod tests {
             assert!(window.draw_if_needed(|renderer| {
                 renderer.render(&mut pixels, width as usize);
             }));
+            let initial_shelf_pixels = pixels.clone();
             let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
             image::save_buffer(
                 format!("/tmp/rereader-groups-{width}.png"),
@@ -766,6 +808,45 @@ mod tests {
             .unwrap();
             click(width as f32 * 0.07, height as f32 * 0.12);
             assert_eq!(ui.get_selected_group(), "all");
+            // Repeated shelf clicks and account navigation keep the model and images.
+            ui.set_page(2);
+            let model = ui.get_books();
+            click(width as f32 * 0.207, height as f32 * 0.965);
+            assert_eq!(ui.get_page(), 2);
+            assert_eq!(ui.get_books(), model);
+            click(width as f32 * 0.36, height as f32 * 0.965);
+            assert!(ui.get_account_open());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
+            });
+            click(width as f32 * 0.207, height as f32 * 0.965);
+            assert!(!ui.get_account_open());
+            assert_eq!(ui.get_books(), model);
+            assert_eq!(ui.get_page(), 2);
+            ui.set_query("书籍12".into());
+            ui.invoke_search();
+            click(width as f32 * 0.207, height as f32 * 0.965);
+            assert!(ui.get_query().is_empty());
+            assert_eq!(ui.get_books().row_count(), 14);
+            ui.set_page(1);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
+            });
+            assert_eq!(
+                pixels, initial_shelf_pixels,
+                "returning to the shelf must preserve its rendered covers"
+            );
+            let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+            image::save_buffer(
+                format!("/tmp/rereader-shelf-return-{width}.png"),
+                &rgb,
+                width,
+                height,
+                image::ColorType::Rgb8,
+            )
+            .unwrap();
         }
         ui.set_page(2);
         ui.invoke_select_group("archive:1".into());
@@ -846,6 +927,152 @@ mod tests {
     }
 
     #[test]
+    fn shelf_updates_reuse_images_only_for_the_same_book_and_cover_url() {
+        let book = Book {
+            id: "b".into(),
+            title: "Updated title".into(),
+            author: "Author".into(),
+            cover: "https://qpic.cn/cover.png".into(),
+            finished: true,
+        };
+        let buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(2, 3);
+        let existing = ShelfRow {
+            book_id: book.id.clone().into(),
+            cover_url: book.cover.clone().into(),
+            cover: slint::Image::from_rgb8(buffer),
+            cover_state: 1,
+            ..Default::default()
+        };
+        let rows = merge_shelf_books(vec![book.clone()], std::slice::from_ref(&existing));
+        assert_eq!(rows[0].cover, existing.cover);
+        assert_eq!(rows[0].cover_state, 1);
+        assert_eq!(rows[0].title, "Updated title");
+        assert!(rows[0].finished);
+        for changed in [
+            Book {
+                cover: "https://qpic.cn/new.png".into(),
+                ..book.clone()
+            },
+            Book {
+                id: "different-book".into(),
+                ..book.clone()
+            },
+        ] {
+            let rows = merge_shelf_books(vec![changed], std::slice::from_ref(&existing));
+            assert_eq!(rows[0].cover_state, 0);
+            assert_eq!(rows[0].cover.size().width, 0);
+        }
+        let rows = merge_shelf_books(
+            vec![Book {
+                cover: String::new(),
+                ..book
+            }],
+            &[existing],
+        );
+        assert_eq!(rows[0].cover_state, 2);
+        assert_eq!(rows[0].cover.size().width, 0);
+    }
+
+    #[tokio::test]
+    async fn refresh_loads_only_missing_or_changed_covers_and_restore_loads_once() {
+        use crate::storage::{FileKind, FileResource};
+        use sha2::{Digest, Sha256};
+        let old_url = "https://qpic.cn/old.png";
+        let new_url = "https://qpic.cn/new.png";
+        let mut responses = Vec::new();
+        for url in [old_url, old_url, new_url, new_url] {
+            responses.extend([
+                (
+                    200,
+                    json!({"books":[{"bookId":"b", "title":"Book", "cover":url}]}),
+                ),
+                (200, json!({"totalReadingTime":0,"totalReadTime":0})),
+                (200, json!({"totalReadingTime":0,"totalReadTime":0})),
+            ]);
+        }
+        let mock = Mock::new(responses);
+        let path = temporary();
+        let store = Store::new(path.clone()).unwrap();
+        let identity = store.save(&credentials()).await.unwrap();
+        let book = Book {
+            id: "b".into(),
+            title: "Book".into(),
+            author: String::new(),
+            cover: old_url.into(),
+            finished: false,
+        };
+        store
+            .apply_shelf_snapshot(&identity, vec![book], None)
+            .await
+            .unwrap();
+        for url in [old_url, new_url] {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(2, 3)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            store
+                .commit_cached_file(
+                    &identity,
+                    FileResource {
+                        book_id: "b".into(),
+                        chapter_uid: None,
+                        kind: FileKind::Cover,
+                        resource_key: format!("{:x}", Sha256::digest(url.as_bytes())),
+                        content_version: None,
+                        variant: "gray-200x300-v1".into(),
+                        media_type: "image/png".into(),
+                        pinned: false,
+                    },
+                    bytes.into_inner(),
+                )
+                .await
+                .unwrap();
+        }
+        let loaded = HashSet::from([("b".into(), old_url.into())]);
+        let empty = HashSet::new();
+        let mut current = None;
+        for (action, known, expected) in [
+            (Action::Restore, &empty, 1),
+            (Action::Refresh, &loaded, 0),
+            (Action::Refresh, &loaded, 1),
+            // An image not applied by the UI (e.g. cancelled work) must be retried.
+            (Action::Refresh, &empty, 1),
+        ] {
+            let events = RefCell::new(Vec::new());
+            execute(&mock.api, &store, &mut current, action, known, &|event| {
+                events.borrow_mut().push(event);
+            })
+            .await
+            .unwrap();
+            let events = events.borrow();
+            let covers: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Cover { id, image } => Some((id, image)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(covers.len(), expected);
+            assert!(covers
+                .iter()
+                .all(|(id, image)| id.as_str() == "b" && image.is_some()));
+            if matches!(action, Action::Refresh) {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|e| matches!(e, Event::Shelf(_)))
+                        .count(),
+                    1
+                );
+            }
+        }
+        assert_eq!(mock.requests.try_iter().count(), 12);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+        mock.finish();
+    }
+
+    #[test]
     fn shelf_search_matches_chinese_titles_and_authors() {
         let rows = vec![
             ShelfRow {
@@ -886,9 +1113,16 @@ mod tests {
         store.save(&credentials()).await.unwrap();
         let (tx, rx) = mpsc::channel();
         let mut current = None;
-        execute(&mock.api, &store, &mut current, Action::Restore, &|event| {
-            tx.send(event).unwrap();
-        })
+        execute(
+            &mock.api,
+            &store,
+            &mut current,
+            Action::Restore,
+            &HashSet::new(),
+            &|event| {
+                tx.send(event).unwrap();
+            },
+        )
         .await
         .unwrap();
         assert_eq!(
@@ -912,9 +1146,16 @@ mod tests {
         assert!(requests[3..]
             .iter()
             .all(|r| r.contains("accesstoken: rotated")));
-        execute(&mock.api, &store, &mut current, Action::Logout, &|_| {})
-            .await
-            .unwrap();
+        execute(
+            &mock.api,
+            &store,
+            &mut current,
+            Action::Logout,
+            &HashSet::new(),
+            &|_| {},
+        )
+        .await
+        .unwrap();
         assert!(current.is_none());
         assert!(store.load().await.unwrap().is_none());
         drop(store);
@@ -933,9 +1174,14 @@ mod tests {
         let store = Store::new(path.clone()).unwrap();
         store.save(&credentials()).await.unwrap();
         let events = RefCell::new(Vec::new());
-        execute(&mock.api, &store, &mut None, Action::Restore, &|e| {
-            events.borrow_mut().push(e)
-        })
+        execute(
+            &mock.api,
+            &store,
+            &mut None,
+            Action::Restore,
+            &HashSet::new(),
+            &|e| events.borrow_mut().push(e),
+        )
         .await
         .unwrap();
         assert!(events
@@ -1010,9 +1256,14 @@ mod tests {
         store.save(&credentials()).await.unwrap();
         let events = RefCell::new(Vec::new());
         let mut current = None;
-        execute(&mock.api, &store, &mut current, Action::Restore, &|e| {
-            events.borrow_mut().push(e)
-        })
+        execute(
+            &mock.api,
+            &store,
+            &mut current,
+            Action::Restore,
+            &HashSet::new(),
+            &|e| events.borrow_mut().push(e),
+        )
         .await
         .unwrap();
         assert_eq!(
@@ -1066,9 +1317,14 @@ mod tests {
             .unwrap();
         let events = RefCell::new(Vec::new());
         let mut current = None;
-        let result = execute(&mock.api, &store, &mut current, Action::Restore, &|e| {
-            events.borrow_mut().push(e)
-        })
+        let result = execute(
+            &mock.api,
+            &store,
+            &mut current,
+            Action::Restore,
+            &HashSet::new(),
+            &|e| events.borrow_mut().push(e),
+        )
         .await;
         assert!(result.is_err());
         assert!(events
@@ -1092,6 +1348,7 @@ mod tests {
         tx.send(Command {
             generation: 1,
             action: Action::Login,
+            loaded_covers: HashSet::new(),
         })
         .unwrap();
         let (_socket, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
@@ -1101,6 +1358,7 @@ mod tests {
         tx.send(Command {
             generation: 2,
             action: Action::Logout,
+            loaded_covers: HashSet::new(),
         })
         .unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -1118,6 +1376,7 @@ mod tests {
         tx.send(Command {
             generation: 3,
             action: Action::Shutdown,
+            loaded_covers: HashSet::new(),
         })
         .unwrap();
         tokio::time::timeout(Duration::from_secs(2), task)
